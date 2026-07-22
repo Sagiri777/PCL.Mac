@@ -10,7 +10,8 @@ import SwiftUI
 struct InstanceSettingsView: View {
     @State var instance: MinecraftInstance
     @State private var memoryText: String
-    
+    @State private var showExportSheet = false
+
     let qosOptions: [QualityOfService] = [
         .userInteractive,
         .userInitiated,
@@ -57,9 +58,29 @@ struct InstanceSettingsView: View {
                 .padding()
             }
             .padding()
+
+            StaticMyCard(title: "整合包导出") {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("将当前实例导出为 Modrinth / CurseForge / HMCL 整合包或纯压缩包，方便分享或在其它机器上导入。")
+                        .font(.custom("PCL English", size: 12))
+                        .foregroundStyle(Color(hex: 0x8C8C8C))
+                    HStack {
+                        MyButton(text: "导出整合包", foregroundStyle: AppSettings.shared.theme.getTextStyle()) {
+                            showExportSheet = true
+                        }
+                        .frame(width: 160, height: 38)
+                        Spacer()
+                    }
+                }
+                .padding()
+            }
+            .padding()
         }
         .font(.custom("PCL English", size: 14))
         .scrollIndicators(.never)
+        .sheet(isPresented: $showExportSheet) {
+            ModpackExportView(instance: instance)
+        }
     }
     
     private func getQualityOfServiceName(_ qos: QualityOfService) -> String {
