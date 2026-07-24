@@ -113,7 +113,7 @@ public class ClientManifest {
                     self.natives = json["natives"].dictionaryObject as? [String: String] ?? [:]
                     
                     if let classifiers = json["downloads"]["classifiers"].dictionary,
-                       let key = natives["osx"],
+                       let key = natives["osx"]?.replacingOccurrences(of: "${arch}", with: "64"),
                        let json = classifiers[key] {
                         self.artifact = DownloadInfo(json: json)
                         self.isNativeLibrary = true
