@@ -2,7 +2,7 @@
 
 高度可定制液态玻璃主题的第三方 macOS 版 Plain Craft Launcher 构建。
 
-本仓库是基于 PCL.Mac 相关开源实现整理的独立发布仓库，用于保存当前可构建版本与公开 release。它不是 PCL 官方仓库，也不代表原作者或上游社区发布。
+本仓库是基于 PCL.Mac 相关开源仓库的独立仓库，用于保存当前可构建版本与公开 release。它不是 PCL 官方仓库，也不代表原作者或上游社区发布。
 
 本项目名称为 `PCL.Mac Glass Edition`，核心特点是拥有高度可定制的液态玻璃主题，包括玻璃强度、边框、染色、圆角、投影和不同区域的视觉参数调整。
 
@@ -67,7 +67,7 @@ CLIENT_ID=你的公开客户端ID scripts/package_release.sh
 
 本仓库包含或参考 Plain Craft Launcher / PCL.Mac 相关实现。请阅读并遵守 [LICENSE](LICENSE) 与 [PCL.Mac.Core/LICENSE](PCL.Mac.Core/LICENSE)。
 
-这是第三方独立整理发布，不应与 Plain Craft Launcher 官方、PCL-Community 或其他上游项目混淆。
+本项目不应与 Plain Craft Launcher 官方、PCL-Community 或其他上游项目混淆。
 
 ## 参考与致谢
 
