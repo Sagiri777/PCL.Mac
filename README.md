@@ -1,92 +1,82 @@
-# PCL.Mac 🖥️
+# PCL.Mac Glass Edition
 
-<div align="center">
-  <img alt="Logo" src="/.github/assets/icon.png" width="180">
+高度可定制液态玻璃主题的第三方 macOS 版 Plain Craft Launcher 构建。
 
-  [![Minimum OS Version](https://img.shields.io/badge/macOS-14.0+-81AD18)](https://developer.apple.com/macos/)
-  [![Stars](https://img.shields.io/github/stars/PCL-Community/PCL.Mac?style=flat)](https://github.com/PCL-Community/PCL.Mac/stargazers)
-  [![Activity](https://img.shields.io/github/commit-activity/y/PCL-Community/PCL.Mac?color=FF6C57)](https://github.com/PCL-Community/PCL.Mac/pulse)
-  [![Contributors](https://img.shields.io/github/contributors/PCL-Community/PCL.Mac)](https://github.com/PCL-Community/PCL.Mac/graphs/contributors)
-  <br>
-  [![](https://hits.zkitefly.eu.org/?tag=https://github.com/PCL-Community/PCL.Mac)](https://hits.zkitefly.eu.org/?tag=https://github.com/PCL-Community/PCL.Mac&web=true)
-</div>
+本仓库是基于 PCL.Mac 相关开源实现整理的独立发布仓库，用于保存当前可构建版本与公开 release。它不是 PCL 官方仓库，也不代表原作者或上游社区发布。
 
-## 简介
+本项目名称为 `PCL.Mac Glass Edition`，核心特点是拥有高度可定制的液态玻璃主题，包括玻璃强度、边框、染色、圆角、投影和不同区域的视觉参数调整。
 
-PCL.Mac 是使用 SwiftUI 框架重构的 [Plain Craft Launcher](https://github.com/Hex-Dragon/PCL2)，支持 macOS 平台。<br>
-支持与主线 (PCL) 与[社区版](https://github.com/PCL-Community/PCL2-CE)一样的游戏安装（原版、Forge、Fabric、NeoForge）、Mod 下载与游戏管理。<br>
-可运行本启动器的最低系统版本为 `macOS 14.0`。<br>
-用户群：`1047463389`
+## 当前版本
 
-### MacOS26 液态玻璃主题
+- Release: `v0.1.0`
+- 系统要求: macOS 14.0+
+- 构建产物: ad-hoc 签名的 `.app` 压缩包
 
-在「设置 → 个性化」中选择 **MacOS26 液态玻璃**：
+## 项目特点
 
-- macOS 26 使用系统原生 `Liquid Glass`；macOS 14–15 自动回退为纯 SwiftUI `Material` 毛玻璃。
-- 整体背景、侧栏/面板、内容卡片的模糊程度可分别调整，并会自动保存。
-- 窗口外缘使用较粗的磨砂玻璃框，可调整框宽、框体磨砂、圆角、表面不透明度、主题染色、边缘高光、投影和交互效果。
-- 主题文件位于 `Resources/Themes/macos26.json`，其中可配置三个区域的默认强度与玻璃染色。
-- 所有内置和本地主题默认可用，不需要主题激活码。
+- 高度可定制的液态玻璃主题。
+- 可分别调整窗口、侧栏、面板与内容区域的玻璃观感。
+- 保留 PCL.Mac 的实例、下载、整合包导入与 Mod 管理能力。
+
+## 主要改动
+
+- 支持拖入 `.mrpack` / 整合包 `.zip` 后创建实例。
+- 支持从资源下载页导入整合包。
+- 改进批量下载：并发下载、候选源切换、SHA1 校验与失败重试。
+- 导入整合包后自动刷新实例列表。
+- 支持 Modrinth、CurseForge、HMCL 与普通 `.minecraft/versions/...` 压缩包的基础识别/导入流程。
 
 ## 下载
 
-本项目尚处早期开发阶段，可从 [Actions](https://github.com/PCL-Community/PCL.Mac/actions) 下载开发版。
+请到本仓库的 [Releases](https://github.com/Sagiri777/PCL.Mac/releases) 页面下载。
 
-> [!WARNING]
-> 由于 App 未签名，直接打开可能会出现“已损坏”等提示。请：
-> 1. 打开系统设置。
-> 2. 进入「隐私与安全性」。
-> 3. 滑到底部，点击「仍然打开」。
-> 
-> 签名并公证后的版本大概会在 2025 年 12 月发布，到时候就可以开袋即食啦～
+> 注意：当前包未经过 Apple Developer ID 签名和公证。首次启动时 macOS 可能提示无法验证开发者，可在「系统设置 -> 隐私与安全性」中手动允许打开。
 
 ## 从源码编译
 
 ```shell
-git clone https://github.com/PCL-Community/PCL.Mac.git
+git clone https://github.com/Sagiri777/PCL.Mac.git
 cd PCL.Mac
 xcodebuild -project PCL.Mac.xcodeproj -scheme PCL.Mac -configuration Debug -destination 'platform=macOS' build
 ```
 
-如需在受限网络环境下解析 Swift Package 依赖，可以先设置代理：
+如需通过本地代理访问 GitHub / Swift Package 依赖：
 
 ```shell
-export HTTP_PROXY=http://127.0.0.1:20122
-export HTTPS_PROXY=http://127.0.0.1:20122
+export http_proxy="http://127.0.0.1:20122"
+export https_proxy="http://127.0.0.1:20122"
 ```
 
 Microsoft 正版登录需要 OAuth `CLIENT_ID`。源码不会携带个人凭证；可在运行前通过环境变量或 `~/Library/Application Support/PCL.Mac/client_id.txt` 提供。
 
-## 打包正式版
-
-仓库提供 Release 打包脚本，输出 ad-hoc 签名的 `.app` 压缩包到 `dist/`：
+## 打包
 
 ```shell
 scripts/package_release.sh
 ```
 
-可选注入公开 OAuth client id 或 CI 更新用 token：
+可选注入公开 OAuth client id：
 
 ```shell
 CLIENT_ID=你的公开客户端ID scripts/package_release.sh
-ARTIFACT_PAT=你的GitHubToken scripts/package_release.sh
 ```
 
-`ARTIFACT_PAT` 不应提交到仓库；脚本只读取环境变量，不会写入源码。
+`Secrets.xcconfig`、构建目录和 release 压缩包已在 `.gitignore` 中排除。
 
-## 协议声明
-`PCL.Mac.Core` 使用 MIT License，使用其代码时请遵循 MIT License 的规定，保留原有的版权声明和许可条款。
+## 协议与声明
 
-## 鸣谢
+本仓库包含或参考 Plain Craft Launcher / PCL.Mac 相关实现。请阅读并遵守 [LICENSE](LICENSE) 与 [PCL.Mac.Core/LICENSE](PCL.Mac.Core/LICENSE)。
 
-本项目实现参考了 HMCL 等 Minecraft 启动器的实现流程。
+这是第三方独立整理发布，不应与 Plain Craft Launcher 官方、PCL-Community 或其他上游项目混淆。
 
-- FUNCTY
-- [AMagicPear](https://github.com/AMagicPear)
-- [Glavo](https://github.com/Glavo)
-- [HMCL-Dev](https://github.com/HMCL-Dev)
-- [Copilot](https://github.com/copilot)
+## 参考与致谢
+
+- [Hex-Dragon/PCL2](https://github.com/Hex-Dragon/PCL2)
+- [PCL-Community/PCL.Mac](https://github.com/PCL-Community/PCL.Mac)
+- [PCL-Community/PCL2-CE](https://github.com/PCL-Community/PCL2-CE)
+- [CylorineStudio/PCL.Mac.Refactor](https://github.com/CylorineStudio/PCL.Mac.Refactor)
+- [HMCL-Dev/HMCL](https://github.com/HMCL-dev/HMCL)
 - [aria2](https://github.com/aria2/aria2)
-- NT | Krnl32
-- 阿鱼 | 🐟🐟🐟
-- [Ciilu](https://github.com/Ciilu)
+- [SwiftyJSON](https://github.com/SwiftyJSON/SwiftyJSON)
+- [ZIPFoundation](https://github.com/weichsel/ZIPFoundation)
+- [TOMLKit](https://github.com/LebJe/TOMLKit)
