@@ -1,0 +1,35 @@
+{
+    "__weight": 100,
+    "id": "macos26",
+    "name": "MacOS26 液态玻璃",
+    "accentColor": "#0A84FF",
+    "mainStyle": {
+        "type": "linearGradient",
+        "startPoint": [0.0, 0.0],
+        "endPoint": [1.0, 0.0],
+        "colors": [
+            "hsl(211, 100, 55)",
+            "hsl(211, 100, 60)",
+            "hsl(211, 100, 55)"
+        ]
+    },
+    "backgroundStyle": {
+        "type": "linearGradient",
+        "startPoint": [0.0, 0.0],
+        "endPoint": [1.0, 1.0],
+        "colors": [
+            { "color": "hsl(220, 70, 92)", "darkColor": "hsl(220, 40, 10)", "location": 0.0 },
+            { "color": "hsl(250, 70, 88)", "darkColor": "hsl(250, 45, 12)", "location": 0.5 },
+            { "color": "hsl(200, 70, 90)", "darkColor": "hsl(200, 40, 8)", "location": 1.0 }
+        ]
+    },
+    "textStyle": "#0A84FF",
+    "glass": {
+        "enabled": true,
+        "cardBlur": 0.72,
+        "panelBlur": 0.58,
+        "backgroundBlur": 0.38,
+        "tintColor": "#0A84FF",
+        "borderColor": "#5AC8FA"
+    }
+}

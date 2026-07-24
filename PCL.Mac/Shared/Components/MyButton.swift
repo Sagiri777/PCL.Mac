@@ -2,75 +2,73 @@
 //  MyButton.swift
 //  PCL.Mac
 //
-//  Created by YiZhiMCQiu on 2025/5/19.
-//
 
 import SwiftUI
 
-struct MyButton: View {
-    @ObservedObject private var dataManager: DataManager = DataManager.shared
+/// MyButton 内部使用的 ButtonStyle。
+///
+/// 早期版本为了让按钮按下时缩放，把 .onLongPressGesture(minimumDuration: .infinity)
+/// 挂在 Button 外面，让 onPressingChanged 同步一个 @State isPressed。
+/// 这种写法在 SwiftUI macOS 上有副作用：LongPress gesture recognizer 会和 Button
+/// 内部的 tap recognizer 抢同一个鼠标事件，导致 action 经常不被触发，
+/// 表现为 “打开文件夹 / 打开日志 / 下载” 等按钮在实例页/工具箱里点击后没反应。
+///
+/// ButtonStyle.configuration.isPressed 由 SwiftUI 自己解析按下抬起，本身不会
+/// 和 Button 抢手势，是规范写法。这里把视觉缩放放到 ButtonStyle 里，
+/// 就把 .onLongPressGesture 完全去掉了。
+private struct MyButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
+            .animation(.easeInOut(duration: 0.10), value: configuration.isPressed)
+    }
+}
 
+struct MyButton: View {
     let text: String
     var descriptionText: String? = nil
     var foregroundStyle: (any ShapeStyle)? = nil
     let action: () -> Void
 
-    @State private var isHovered: Bool = false
-    @State private var isPressed: Bool = false
+    @State private var isHovered = false
 
     private func getForegroundStyle() -> some ShapeStyle {
-        if let foregroundStyle = self.foregroundStyle {
-            return AnyShapeStyle(foregroundStyle)
-        }
+        if let foregroundStyle { return AnyShapeStyle(foregroundStyle) }
         return isHovered ? AnyShapeStyle(AppSettings.shared.theme.getTextStyle()) : AnyShapeStyle(Color("TextColor"))
     }
 
+    private func getAccentFill() -> Color {
+        isHovered ? AppSettings.shared.theme.getAccentColor().opacity(0.1) : .clear
+    }
+
     var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 4)
-                .stroke(self.getForegroundStyle(), lineWidth: 1.3)
-            RoundedRectangle(cornerRadius: 6)
-                .foregroundStyle(isHovered ? AppSettings.shared.theme.getAccentColor().opacity(0.1) : .clear)
-            VStack {
-                Spacer()
-                Text(text)
-                    .font(.custom("PCL English", size: 14))
-                    .foregroundStyle(self.getForegroundStyle())
-                    .padding(.leading)
-                    .padding(.trailing)
-                    .frame(maxWidth: .infinity)
-                if let descriptionText = self.descriptionText {
-                    Text(descriptionText)
-                        .font(.custom("PCL English", size: 12))
-                        .foregroundStyle(Color(hex: 0x9A9A9A))
-                }
-                Spacer()
-            }
-        }
-        .onHover {
-            isHovered = $0
-        }
-        .gesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { _ in
-                    isPressed = true
-                }
-                .onEnded { value in
-                    if isPressed {
-                        action()
+        Button(action: action) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 4)
+                    .stroke(getForegroundStyle(), lineWidth: 1.3)
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(getAccentFill())
+                VStack {
+                    Spacer()
+                    Text(text)
+                        .font(.custom("PCL English", size: 14))
+                        .foregroundStyle(getForegroundStyle())
+                        .padding(.horizontal)
+                        .frame(maxWidth: .infinity)
+                    if let descriptionText {
+                        Text(descriptionText)
+                            .font(.custom("PCL English", size: 12))
+                            .foregroundStyle(Color(hex: 0x9A9A9A))
                     }
-                    isPressed = false
+                    Spacer()
                 }
-        )
-        .scaleEffect(isPressed ? 0.85 : 1.0)
-        .animation(.easeInOut(duration: 0.2), value: isHovered)
-        .animation(.easeInOut(duration: 0.2), value: isPressed)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(MyButtonStyle())
+        .onHover { isHovered = $0 }
+        .animation(.easeInOut(duration: 0.12), value: isHovered)
     }
 }
 
-
-#Preview {
-    MyButton(text: "测试") { }
-        .padding()
-        .background(Color(hex: 0xC4CEE6))
-}
+#Preview { MyButton(text: "测试") {}.padding() }

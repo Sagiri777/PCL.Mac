@@ -14,6 +14,16 @@ public class MinecraftDirectory: Codable, Identifiable, Hashable {
     public let rootURL: URL
     public var name: String
     public var instances: [InstanceInfo] = []
+
+    /// 加载状态机（用普通 var 即可；reload 完成会通过 DataManager.shared.objectWillChange.send()
+    /// 主动通知所有订阅者）：
+    /// - isLoading: 当前正在 IO；调用方应在看到这个状态时显示转圈 / spinner。
+    /// - loadError: 上一次加载抛出的错误；UI 据此决定显示重试按钮 vs "无内容"占位。
+    /// 关键不变量：一次 loadInnerInstances 结束（成功或失败）后，isLoading 必须回 false，
+    /// loadError 与 instances 必须与之一致。**永远不要让 isLoading 在 await 后还停留在 true**，
+    /// 否则 VersionListView 会一直挂在 "加载中……"。
+    public var isLoading: Bool = false
+    public var loadError: String? = nil
     
     public func hash(into hasher: inout Hasher) {
         hasher.combine(rootURL)
@@ -49,9 +59,30 @@ public class MinecraftDirectory: Codable, Identifiable, Hashable {
     
     public func loadInnerInstances(callback: (([InstanceInfo]) -> Void)? = nil) {
         instances.removeAll()
+        loadError = nil
+        isLoading = true
+        // 立刻发一次，让 UI 知道我们进入加载态
+        DataManager.shared.objectWillChange.send()
+
+        let directoryURL = versionsURL
+        let fm = FileManager.default
         Task {
+            // 目录里没有 versions/ 子目录 —— 视为合法的"空状态"，不是错误。
+            // 这样用户加一个全新的目录进来就不会被卡在"加载失败"上。
+            if !fm.fileExists(atPath: directoryURL.path) {
+                await MainActor.run {
+                    self.isLoading = false
+                    DataManager.shared.objectWillChange.send()
+                    callback?(self.instances)
+                }
+                return
+            }
             do {
-                let contents = try FileManager.default.contentsOfDirectory(at: versionsURL, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])
+                let contents = try fm.contentsOfDirectory(
+                    at: directoryURL,
+                    includingPropertiesForKeys: [.isDirectoryKey],
+                    options: [.skipsHiddenFiles]
+                )
                 let instanceDirectories = contents.filter { url in
                     (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
                 }
@@ -65,17 +96,27 @@ public class MinecraftDirectory: Codable, Identifiable, Hashable {
                             runningDirectory: instanceDirectory,
                             brand: instance.clientBrand
                         )
-                        DispatchQueue.main.async {
+                        await MainActor.run {
                             self.instances.append(info)
                         }
                     }
                 }
-                DispatchQueue.main.async {
-                    callback?(self.instances)
+                await MainActor.run {
+                    self.isLoading = false
                     DataManager.shared.objectWillChange.send()
+                    callback?(self.instances)
                 }
             } catch {
-                err("读取版本目录失败: \(error.localizedDescription)")
+                // ❗关键：catch 路径必须显式 resolve 状态，否则 UI 会一直停在"加载中"。
+                // 之前这个分支只写 err 日志就返回，是导致 VersionListView 永远转圈的根因。
+                let message = error.localizedDescription
+                await MainActor.run {
+                    self.loadError = message
+                    self.isLoading = false
+                    DataManager.shared.objectWillChange.send()
+                    err("读取版本目录失败: \(message)")
+                    callback?(self.instances)
+                }
             }
         }
     }

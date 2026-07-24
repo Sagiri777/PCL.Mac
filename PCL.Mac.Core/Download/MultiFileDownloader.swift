@@ -33,6 +33,7 @@ public class MultiFileDownloader {
     private let items: [DownloadItem]
     private let concurrentLimit: Int
     private let replaceMethod: ReplaceMethod
+    private let networkCategory: NetworkCategory
     private let progress: ((Double, Int) -> Void)?
     private let total: Int
     private var totalProgress: Double = 0
@@ -44,6 +45,7 @@ public class MultiFileDownloader {
         destinations: [URL],
         concurrentLimit: Int = 16,
         replaceMethod: ReplaceMethod = .skip,
+        networkCategory: NetworkCategory = .gameDownload,
         progress: ((Double, Int) -> Void)? = nil
     ) {
         self.init(
@@ -51,6 +53,7 @@ public class MultiFileDownloader {
             items: (0..<urls.count).map { .init(urls[$0], destinations[$0]) },
             concurrentLimit: concurrentLimit,
             replaceMethod: replaceMethod,
+            networkCategory: networkCategory,
             progress: progress
         )
     }
@@ -60,12 +63,14 @@ public class MultiFileDownloader {
         items: [DownloadItem],
         concurrentLimit: Int = 16,
         replaceMethod: ReplaceMethod = .skip,
+        networkCategory: NetworkCategory = .gameDownload,
         progress: ((Double, Int) -> Void)? = nil
     ) {
         self.task = task
         self.items = items
         self.concurrentLimit = concurrentLimit
         self.replaceMethod = replaceMethod
+        self.networkCategory = networkCategory
         self.progress = progress
         self.total = items.count
     }
@@ -134,7 +139,7 @@ public class MultiFileDownloader {
         var lastProgress: Double = 0
         
         do {
-            try await SingleFileDownloader.download(url: item.url, destination: item.destination, replaceMethod: replaceMethod) { progress in
+            try await SingleFileDownloader.download(url: item.url, destination: item.destination, replaceMethod: replaceMethod, networkCategory: networkCategory) { progress in
                 self.totalProgress += (progress - lastProgress)
                 lastProgress = progress
             }
@@ -142,7 +147,7 @@ public class MultiFileDownloader {
             guard let fallback = item.fallbackURL else {
                 throw error
             }
-            try await SingleFileDownloader.download(url: fallback, destination: item.destination, replaceMethod: .replace) { progress in
+            try await SingleFileDownloader.download(url: fallback, destination: item.destination, replaceMethod: .replace, networkCategory: networkCategory) { progress in
                 self.totalProgress += (progress - lastProgress)
                 lastProgress = progress
             }

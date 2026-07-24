@@ -28,22 +28,26 @@ struct MyList<Content: View>: View {
     }
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(cases.indices, id: \.self) { index in
-                let item = cases[index]
-                RouteView(content: content, item: item, height: height)
-                    .offset(x: appeared.contains(item) ? 0 : -dataManager.leftTabWidth / 2)
-                    .opacity(appeared.contains(item) ? 1 : 0)
-                    .onAppear {
-                        if !appeared.contains(item) {
-                            DispatchQueue.main.asyncAfter(deadline: .now() + Double(index + animationIndex) * 0.038) {
-                                let item1 = item
-                                withAnimation(.spring(response: 0.4, dampingFraction: 0.65)) {
-                                    _ = appeared.insert(item1)
+        // 用 ScrollView + LazyVStack 替代 VStack：长 sidebar 嵌套时只渲染可见项，
+        // 避免一次性实例化所有 RouteView（每个都订阅 DataManager）。
+        ScrollView(.vertical, showsIndicators: false) {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                ForEach(cases.indices, id: \.self) { index in
+                    let item = cases[index]
+                    RouteView(content: content, item: item, height: height)
+                        .offset(x: appeared.contains(item) ? 0 : -dataManager.leftTabWidth / 2)
+                        .opacity(appeared.contains(item) ? 1 : 0)
+                        .onAppear {
+                            if !appeared.contains(item) {
+                                DispatchQueue.main.asyncAfter(deadline: .now() + Double(index + animationIndex) * 0.038) {
+                                    let item1 = item
+                                    withAnimation(.spring(response: 0.4, dampingFraction: 0.65)) {
+                                        _ = appeared.insert(item1)
+                                    }
                                 }
                             }
                         }
-                    }
+                }
             }
         }
     }
@@ -67,37 +71,40 @@ fileprivate struct RouteView<Content: View>: View {
     }
     
     var body: some View {
-        HStack {
-            Group {
-                if dataManager.router.getLast().isSame(item) {
-                    RoundedRectangle(cornerRadius: 5)
-                        .foregroundStyle(AnyShapeStyle(AppSettings.shared.theme.getTextStyle()))
-                } else {
-                    Color.clear
+        Button(action: selectRoute) {
+            HStack {
+                Group {
+                    if dataManager.router.getLast().isSame(item) {
+                        RoundedRectangle(cornerRadius: 5)
+                            .foregroundStyle(AnyShapeStyle(AppSettings.shared.theme.getTextStyle()))
+                    } else {
+                        Color.clear
+                    }
                 }
+                .frame(width: 4, height: indicatorHeight)
+
+                content(item, dataManager.router.getLast().isSame(item))
+                    .frame(height: height)
+                    .padding(.leading, 5)
+                    .animation(.easeInOut(duration: 0.2), value: dataManager.router.getLast())
+                Spacer()
             }
-            .frame(width: 4, height: indicatorHeight)
-            
-            content(item, dataManager.router.getLast().isSame(item))
-                .frame(height: height)
-                .padding(.leading, 5)
-                .animation(.easeInOut(duration: 0.2), value: dataManager.router.getLast())
-            Spacer()
+            .frame(maxWidth: .infinity, minHeight: height)
+            .background(isHovered ? AppSettings.shared.theme.getAccentColor().opacity(0.1) : Color.clear)
+            .contentShape(Rectangle())
         }
-        .background(isHovered ? AppSettings.shared.theme.getAccentColor().opacity(0.1) : Color.clear)
+        .buttonStyle(.plain)
         .animation(.easeInOut(duration: 0.2), value: isHovered)
-        .contentShape(Rectangle())
-        .onHover { hover in
-            isHovered = hover
-        }
-        .onTapGesture {
-            if dataManager.router.getLast().isSame(item) { return }
-            dataManager.router.removeLast()
-            dataManager.router.append(item)
-            indicatorHeight = 10
-            withAnimation(.spring(duration: 0.2)) {
-                indicatorHeight = height - 8
-            }
+        .onHover { isHovered = $0 }
+    }
+
+    private func selectRoute() {
+        if dataManager.router.getLast().isSame(item) { return }
+        dataManager.router.removeLast()
+        dataManager.router.append(item)
+        indicatorHeight = 10
+        withAnimation(.spring(duration: 0.2)) {
+            indicatorHeight = height - 8
         }
     }
 }

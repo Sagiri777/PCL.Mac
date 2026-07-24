@@ -42,6 +42,8 @@ struct NewAccountView: View {
                             AuthMethodComponent(type: .microsoft)
                             AuthMethodComponent(type: .offline)
                             AuthMethodComponent(type: .yggdrasil)
+                            // Nide8 快捷入口（PCL 上游有独立 PageLoginNide，这里用一个预填 URL 的 Yggdrasil 表单代替）
+                            Nide8ShortcutButton()
                         }
                     }
                     if isAppeared { card.noAnimation() } else { card }
@@ -231,7 +233,7 @@ fileprivate struct NewMicrosoftAccountView: View {
     
     private func signIn() async {
         do {
-            guard let authToken = try await MsLogin.signIn() else {
+            guard let authToken = try await MsLogin.signInViaBrowser() else {
                 HintManager.default.add(.init(text: "登录失败！", type: .critical))
                 return
             }
@@ -265,7 +267,7 @@ fileprivate struct NewMicrosoftAccountView: View {
 fileprivate struct NewYggdrasilAccountView: View {
     @ObservedObject private var state: NewAccountViewState = StateManager.shared.newAccount
     @ObservedObject private var dataManager: DataManager = .shared
-    @State private var authenticationServer: String = ""
+    @State private var authenticationServer: String = UserDefaults.standard.string(forKey: "PCLMac.Nide8.PrefillURL") ?? ""
     @State private var errorMessage: String = ""
     @State private var accountIdentifier: String = ""
     @State private var password: String = ""
@@ -362,5 +364,40 @@ fileprivate struct NewYggdrasilAccountView: View {
     private func isValidServer(_ str: String) -> Bool {
         let url = URL(string: str)
         return url != nil && url!.host() != nil
+    }
+}
+
+
+// MARK: - Nide8 快捷按钮
+// PCL 上游有独立 PageLoginNide.xaml(.vb)；这里复用 NewYggdrasilAccountView 流程，
+// 区别是点按钮自动把 authenticationServer 字段填为 Nide8 默认 URL。
+fileprivate struct Nide8ShortcutButton: View {
+    @ObservedObject private var state: NewAccountViewState = StateManager.shared.newAccount
+    @State private var pendingPrefill: String? = nil
+
+    var body: some View {
+        MyListItem {
+            HStack {
+                Image("ServerIcon")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 25)
+                VStack(alignment: .leading) {
+                    Text("Nide8 快捷登录")
+                        .foregroundStyle(Color("TextColor"))
+                    Text("使用 Nide8 验证服务器（auth.mc-user.com:233）")
+                        .foregroundStyle(Color(hex: 0x8C8C8C))
+                }
+                .font(.custom("PCL English", size: 14))
+                Spacer()
+            }
+            .frame(height: 32)
+            .padding(5)
+        }
+        .onTapGesture {
+            // 把 Nide8 默认 URL 通过 UserDefaults 传给 NewYggdrasilAccountView
+            UserDefaults.standard.set(Nide8AccountHelper.defaultURL.absoluteString, forKey: "PCLMac.Nide8.PrefillURL")
+            state.type = .yggdrasil
+        }
     }
 }

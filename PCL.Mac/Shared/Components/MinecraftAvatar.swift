@@ -6,11 +6,13 @@
 //
 
 import SwiftUI
-import CoreGraphics
+import CoreImage
+import AppKit
 
 struct MinecraftAvatar: View {
-    @State private var skinData: Data?
-    
+    // 直接缓存解码后的 CGImage，避免每次 body 重渲都跑 CoreImage。
+    @State private var decoded: CGImage?
+
     private let account: AnyAccount
     private let src: String
     private let size: CGFloat
@@ -19,64 +21,62 @@ struct MinecraftAvatar: View {
         self.account = account
         self.src = src
         self.size = size
-        if let cached = SkinCacheStorage.shared.skinCache[account.uuid] {
-            self._skinData = State(initialValue: cached)
+        if let cached = SkinCacheStorage.shared.cachedDecodedAvatar(for: account) {
+            self._decoded = State(initialValue: cached.image)
         }
     }
 
     var body: some View {
         ZStack {
-            if let data = skinData {
-                SkinLayerView(imageData: data, startX: 8, startY: 16, width: 8 * 5.4 / 58 * size, height: 8 * 5.4 / 58 * size)
+            if let decoded = decoded {
+                AvatarImageView(decoded: decoded, size: size)
                     .shadow(color: Color.black.opacity(0.2), radius: 1)
-                SkinLayerView(imageData: data, startX: 40, startY: 16, width: 7.99 * 6.1 / 58 * size, height: 7.99 * 6.1 / 58 * size)
             }
         }
         .frame(width: size, height: size)
         .clipped()
         .padding(6)
-        .task {
-            if skinData == nil {
-                do {
-                    self.skinData = try await SkinCacheStorage.shared.loadSkin(account: account)
-                } catch {
-                    err("无法加载头像: \(error.localizedDescription)")
-                }
+        .task(id: account.uuid) {
+            // 1) 进程内解码缓存命中：直接用，跳过网络和解码。
+            if let hit = SkinCacheStorage.shared.cachedDecodedAvatar(for: account) {
+                if decoded == nil || decoded != hit.image { decoded = hit.image }
+                return
             }
+            // 2) 加载 PNG 数据（命中持久化缓存或拉网络）。
+            let data: Data
+            do {
+                data = try await SkinCacheStorage.shared.loadSkin(account: account)
+            } catch {
+                err("无法加载头像: \(error.localizedDescription)")
+                return
+            }
+            // 3) 后台解码（CoreImage + GPU），主线程只更新 CGImage 引用。
+            let avatar = await Task.detached(priority: .userInitiated) {
+                SkinCacheStorage.shared.decodeAvatar(from: data)
+            }.value
+            guard let avatar else { return }
+            SkinCacheStorage.shared.storeDecoded(avatar, for: account)
+            decoded = avatar.image
         }
     }
 }
 
-fileprivate struct SkinLayerView: View {
-    let imageData: Data
-    let startX: CGFloat
-    let startY: CGFloat
-    let width: CGFloat
-    let height: CGFloat
-    @State private var image: NSImage?
+/// 通用头像渲染：传入已解码的 CGImage，不再每次 onAppear 重复解码。
+struct AvatarImageView: View {
+    let decoded: CGImage
+    let size: CGFloat
+
+    /// 预渲染头像（非 skin texture 尺寸）使用 .medium 插值；
+    /// skin texture 头部裁剪（8x8 → 放大到 58pt）使用 .none 保留像素感。
+    private var isPreRendered: Bool {
+        decoded.width != 8 || decoded.height != 8
+    }
 
     var body: some View {
-        Group {
-            if let image = image {
-                Image(nsImage: image)
-                    .interpolation(.none)
-                    .resizable()
-                    .frame(width: width, height: height)
-            } else {
-                Color.clear
-            }
-        }
-        .onAppear {
-            if var image = CIImage(data: imageData) {
-                let yOffset: CGFloat = image.extent.height == 32 ? 0 : 32
-                image = image.cropped(to: CGRect(x: startX, y: startY + yOffset, width: 8, height: 8))
-                let context = CIContext(options: nil)
-                let extent = image.extent
-                guard let cgImage = context.createCGImage(image, from: extent) else { return }
-                self.image = NSImage(cgImage: cgImage, size: image.extent.size)
-            } else {
-                err("无法获取头像")
-            }
-        }
+        Image(nsImage: NSImage(cgImage: decoded, size: CGSize(width: decoded.width, height: decoded.height)))
+            .interpolation(isPreRendered ? .medium : .none)
+            .resizable()
+            .scaledToFit()
+            .frame(width: size, height: size)
     }
 }

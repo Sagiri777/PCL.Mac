@@ -48,7 +48,7 @@ public class YggdrasilClient {
     }
     
     public func getProfile(id: String) async throws -> Profile {
-        let json = try await Requests.get(serverURL.appending(path: "/sessionserver/session/minecraft/profile/\(id)")).getJSONOrThrow()
+        let json = try await Requests.get(serverURL.appending(path: "/sessionserver/session/minecraft/profile/\(id)"), category: .minecraftAPI).getJSONOrThrow()
         return .init(json: json)
     }
     

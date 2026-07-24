@@ -325,15 +325,18 @@ public enum ClientBrand: String, Codable, Hashable {
     case quilt = "quilt"
     case forge = "forge"
     case neoforge = "neoforge"
-    
+    case optiFine = "optifine"
+    case liteLoader = "liteloader"
+
     public func getName() -> String {
-        if self == .neoforge {
-            return "NeoForge"
-        } else {
-            return self.rawValue.capitalized
+        switch self {
+        case .neoforge: return "NeoForge"
+        case .optiFine: return "OptiFine"
+        case .liteLoader: return "LiteLoader"
+        default: return self.rawValue.capitalized
         }
     }
-    
+
     public var index: Int {
         switch self {
         case .vanilla: 0
@@ -341,6 +344,8 @@ public enum ClientBrand: String, Codable, Hashable {
         case .quilt: 2
         case .forge: 3
         case .neoforge: 4
+        case .optiFine: 5
+        case .liteLoader: 6
         }
     }
 }

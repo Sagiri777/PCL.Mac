@@ -116,36 +116,29 @@ struct MenuItemButton: View {
     @State private var isHovered = false
     
     var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 13)
-                .foregroundStyle(dataManager.router.getRoot() == route ? .white : (isHovered ? Color(hex: 0xFFFFFF, alpha: 0.17) : .clear))
-            
-            HStack {
-                getImage()
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 16, height: 16)
-                    .foregroundStyle(dataManager.router.getRoot() == route ?
-                                     AnyShapeStyle(AppSettings.shared.theme.getTextStyle()) : AnyShapeStyle(.white))
-                Text(getText())
-                    .foregroundStyle(dataManager.router.getRoot() == route ?
-                                     AnyShapeStyle(AppSettings.shared.theme.getTextStyle()) : AnyShapeStyle(.white))
+        Button {
+            if dataManager.router.getRoot() != route { dataManager.router.setRoot(route) }
+        } label: {
+            ZStack {
+                RoundedRectangle(cornerRadius: 13)
+                    .foregroundStyle(dataManager.router.getRoot() == route ? .white : (isHovered ? Color(hex: 0xFFFFFF, alpha: 0.17) : .clear))
+                HStack(spacing: 7) {
+                    getImage()
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 16, height: 16)
+                    Text(getText())
+                }
+                .foregroundStyle(dataManager.router.getRoot() == route ? AnyShapeStyle(AppSettings.shared.theme.getTextStyle()) : AnyShapeStyle(.white))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
         .frame(width: 75, height: 27)
         .animation(.easeInOut(duration: 0.2), value: isHovered)
         .animation(.easeInOut(duration: 0.2), value: dataManager.router.getRoot() == route)
-        .gesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { value in
-                    if dataManager.router.getRoot() != route {
-                        dataManager.router.setRoot(route)
-                    }
-                }
-        )
-        .onHover { hover in
-            isHovered = hover
-        }
+        .onHover { isHovered = $0 }
     }
     
     private func getImage() -> Image {

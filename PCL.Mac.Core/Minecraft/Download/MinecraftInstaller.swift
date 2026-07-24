@@ -114,16 +114,18 @@ public class MinecraftInstaller {
                     continue
                 }
                 
+                let source = DownloadSourceManager.shared.getDownloadSource()
+                guard let url = source.getLibraryURL(library) else { continue }
                 libraryNames.append(library.name)
-                items.append(.init(DownloadSourceManager.shared.getDownloadSource(), { $0.getLibraryURL(library)! }, destination: dest))
+                items.append(.init(source, { _ in url }, destination: dest))
             }
         }
         
         try await MultiFileDownloader(task: task, items: items).start()
         
         for library in task.manifest!.getNeededLibraries() {
-            if libraryNames.contains(library.name) {
-                CacheStorage.default.add(name: library.name, path: task.minecraftDirectory.librariesURL.appending(path: library.artifact!.path))
+            if libraryNames.contains(library.name), let artifact = library.artifact {
+                CacheStorage.default.add(name: library.name, path: task.minecraftDirectory.librariesURL.appending(path: artifact.path))
             }
         }
     }
@@ -141,8 +143,10 @@ public class MinecraftInstaller {
                 continue
             }
             
+            let source = DownloadSourceManager.shared.getDownloadSource()
+            guard let url = source.getLibraryURL(library) else { continue }
             libraryNames.append(library.name)
-            items.append(.init(DownloadSourceManager.shared.getDownloadSource(), { $0.getLibraryURL(library)! }, destination: dest))
+            items.append(.init(source, { _ in url }, destination: dest))
         }
         
         try? FileManager.default.createDirectory(at: task.versionURL.appending(path: "natives"), withIntermediateDirectories: true)

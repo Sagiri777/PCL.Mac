@@ -82,7 +82,7 @@ struct ToolboxView: View {
                         .frame(width: 140)
                         
                         MyButton(text: "打开文件夹") {
-                            NSWorkspace.shared.open(settings.customFilesSaveURL)
+                            Util.openInFinder(settings.customFilesSaveURL)
                         }
                         .frame(width: 140)
                     }

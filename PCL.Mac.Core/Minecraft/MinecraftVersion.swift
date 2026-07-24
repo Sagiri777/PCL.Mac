@@ -20,6 +20,7 @@ public class MinecraftVersion: Comparable, Hashable {
     
     public func hash(into hasher: inout Hasher) {
         hasher.combine(displayName)
+        hasher.combine(type)
     }
     
     public init(displayName: String, type: VersionType? = nil) {

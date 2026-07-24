@@ -261,7 +261,14 @@ fileprivate struct LoaderCard: View {
             }
         }
         .task {
+            // 双保险：loadVersions 必须以 self.versions = ... 收尾。如果实现哪天出 bug 抛错，
+            // 这里兜底一个空集，避免 UI 永远停在"加载中……"上。
             await loadVersions()
+            if versions == nil {
+                await MainActor.run {
+                    self.versions = []
+                }
+            }
         }
         .onChange(of: versions) {
             guard let versions else {

@@ -11,14 +11,29 @@ import SwiftyJSON
 public class PlayerProfile: Codable {
     public let uuid: UUID
     public let name: String
-    
-    public init(fromResponse data: Data) {
-        let json = try! JSON(data: data)
-        self.uuid = UUID(uuidString: json["id"].stringValue.replacingOccurrences(
-            of: "(\\w{8})(\\w{4})(\\w{4})(\\w{4})(\\w{12})",
-            with: "$1-$2-$3-$4-$5",
-            options: .regularExpression
-        ))!
+
+    public init(fromResponse data: Data) throws {
+        let json: JSON
+        do {
+            json = try JSON(data: data)
+        } catch {
+            throw MyLocalizedError(reason: "PlayerProfile 解析失败：\(error.localizedDescription)")
+        }
+        // 微软返回的 id 是无连字符的 32 字符 hex，需要插入连字符
+        let rawId = json["id"].stringValue
+        let dashedId: String
+        if rawId.contains("-") {
+            dashedId = rawId
+        } else if rawId.count == 32 {
+            let s = Array(rawId)
+            dashedId = "\(String(s[0..<8]))-\(String(s[8..<12]))-\(String(s[12..<16]))-\(String(s[16..<20]))-\(String(s[20..<32]))"
+        } else {
+            throw MyLocalizedError(reason: "无效的玩家 UUID：\(rawId)")
+        }
+        guard let parsedUUID = UUID(uuidString: dashedId) else {
+            throw MyLocalizedError(reason: "UUID 解析失败：\(dashedId)")
+        }
+        self.uuid = parsedUUID
         self.name = json["name"].stringValue
     }
 }
@@ -40,7 +55,7 @@ public class MicrosoftAccount: Account {
             return
         }
         
-        if let authToken = try? await MsLogin.refreshAccessToken(self.refreshToken) {
+        if let authToken = try? await MsLogin.refreshAccessTokenLive(self.refreshToken) {
             if (try? await MsLogin.getMinecraftAccessToken(id: id, authToken.accessToken)) != nil {
                 self.refreshToken = authToken.refreshToken
                 debug("成功刷新 Access Token")
@@ -66,16 +81,21 @@ public class MicrosoftAccount: Account {
         guard let accessToken = authToken.minecraftAccessToken else {
             return nil
         }
-        
-        if let data = await Requests.get(
-            URL(string: "https://api.minecraftservices.com/minecraft/profile")!,
-            headers: [
-                "Authorization": "Bearer \(accessToken)"
-            ]
-        ).data {
-            return .init(refreshToken: authToken.refreshToken, profile: .init(fromResponse: data))
+        guard let url = URL(string: "https://api.minecraftservices.com/minecraft/profile") else {
+            return nil
         }
-        return nil
+        guard let data = await Requests.get(url, headers: [
+            "Authorization": "Bearer \(accessToken)"
+        ]).data else {
+            return nil
+        }
+        do {
+            let profile = try PlayerProfile(fromResponse: data)
+            return .init(refreshToken: authToken.refreshToken, profile: profile)
+        } catch {
+            err("MicrosoftAccount.create 失败：\(error.localizedDescription)")
+            return nil
+        }
     }
     
     public func putAccessToken(options: LaunchOptions) async {

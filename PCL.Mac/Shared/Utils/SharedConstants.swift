@@ -20,8 +20,11 @@ public struct SharedConstants {
     public let dateFormatter = DateFormatter()
     
     public let isDevelopment: Bool
-    public let version = "Beta 0.1.1"
+    public let version = "0.2.0"
     public let branch: String
+    public let editionName = "PCL.Mac Liquid Glass Edition"
+    public let editionSubtitle = "macOS 26 原生液态玻璃增强版"
+    public let projectURL = URL(string: "https://github.com/Meloong-Git/PCL")!
     
     private init() {
         self.applicationContentsURL = Bundle.main.bundleURL.appending(path: "Contents")

@@ -61,8 +61,8 @@ public class VersionManifest: Codable {
     public static func getVersionManifest() async -> VersionManifest? {
         debug("正在获取版本清单")
         do {
-            let versions = VersionManifest(try await Requests.get(DownloadSourceManager.shared.getVersionManifestURL()).getJSONOrThrow())
-            if let unlistedVersions = await Requests.get("https://alist.8mi.tech/d/mirror/unlisted-versions-of-minecraft/Auto/version_manifest.json").json.map(VersionManifest.init(_:)) {
+            let versions = VersionManifest(try await Requests.get(DownloadSourceManager.shared.getVersionManifestURL(), category: .gameDownload).getJSONOrThrow())
+            if let unlistedVersions = await Requests.get("https://alist.8mi.tech/d/mirror/unlisted-versions-of-minecraft/Auto/version_manifest.json", category: .gameDownload).json.map(VersionManifest.init(_:)) {
                 for version in unlistedVersions.versions {
                     version.url = Util.replaceRoot(
                         url: version.url,

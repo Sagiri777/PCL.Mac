@@ -8,14 +8,16 @@
 import SwiftUI
 
 struct BaseCardContainer<Content: View>: View {
-    @ObservedObject private var settings: AppSettings = .shared
+    // BaseCardContainer 自身不再订阅 AppSettings；玻璃参数通过
+    // 独立子 view CardBackgroundView 订阅 GlassSettings，避免拖动玻璃滑块
+    // 时整棵界面（包括卡片正文）都重渲染。
     @State private var isHovered: Bool = false
     @State private var isAppeared: Bool = false
-    
+
     let content: (Binding<Bool>) -> Content
     let index: Int
     let hasAnimation: Bool
-    
+
     init(index: Int, hasAnimation: Bool, content: @escaping (Binding<Bool>) -> Content) {
         self.index = index
         self.hasAnimation = hasAnimation
@@ -26,14 +28,7 @@ struct BaseCardContainer<Content: View>: View {
         content($isHovered)
             .foregroundStyle(isHovered ? AppSettings.shared.theme.getTextStyle() : .init(Color("TextColor")))
             .padding()
-            .background(
-                RoundedRectangle(cornerRadius: 5)
-                    .fill(settings.useUltraThinMaterial ? AnyShapeStyle(.ultraThinMaterial) : .init(Color("MyCardBackgroundColor")))
-                    .shadow(
-                        color: isHovered ? AppSettings.shared.theme.getAccentColor() : .gray,
-                        radius: 2, x: 0.5, y: 0.5
-                    )
-            )
+            .background(CardBackgroundView(isHovered: isHovered))
             .padding(.top, -23)
             .opacity(isAppeared ? 1 : 0)
             .offset(y: isAppeared ? 25 : 0)
@@ -52,6 +47,45 @@ struct BaseCardContainer<Content: View>: View {
                     isAppeared = true
                 }
             }
+    }
+}
+
+/// 卡片背景：液态玻璃主题优先；其次按用户"超薄材质"开关；否则使用实色卡片。
+/// 独立订阅 GlassSettings/AppSettings（仅关心玻璃/超薄材质 + theme 切换），
+/// 使玻璃参数变化时只有这个 view 重渲染。
+private struct CardBackgroundView: View {
+    @ObservedObject private var glassSettings: GlassSettings = .shared
+    @ObservedObject private var appSettings: AppSettings = .shared
+    let isHovered: Bool
+
+    var body: some View {
+        let theme = appSettings.theme ?? Theme.pcl
+        if let config = glassSettings.glassConfig {
+            LiquidGlassBackground(
+                role: .card,
+                config: config,
+                blurStrength: appSettings.glassCardBlurStrength,
+                surfaceOpacity: appSettings.glassSurfaceOpacity,
+                tintStrength: appSettings.glassTintStrength,
+                highlightStrength: appSettings.glassHighlightStrength,
+                shadowStrength: appSettings.glassShadowStrength,
+                interactive: appSettings.glassInteractiveEffects,
+                shape: RoundedRectangle(cornerRadius: 12, style: .continuous)
+            )
+            .shadow(
+                color: isHovered ? glassSettings.accentColor.opacity(0.35) : .clear,
+                radius: 5, x: 0, y: 2
+            )
+        } else {
+            RoundedRectangle(cornerRadius: 5)
+                .fill(appSettings.useUltraThinMaterial
+                      ? AnyShapeStyle(.ultraThinMaterial)
+                      : AnyShapeStyle(Color("MyCardBackgroundColor")))
+                .shadow(
+                    color: isHovered ? glassSettings.accentColor : .gray,
+                    radius: 2, x: 0.5, y: 0.5
+                )
+        }
     }
 }
 

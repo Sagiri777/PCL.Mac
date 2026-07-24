@@ -96,37 +96,35 @@ struct DownloadView: View {
     }
 }
 
+/// RoundedButton 的专用 ButtonStyle。
+///
+/// 为什么单独写一个：早期版本为了实现按下缩放，把 .onLongPressGesture 挂在外
+/// 面上，结果和 Button 内部的 tap recognizer 抢同一组鼠标事件，导致 “刷新”
+/// “返回” 等按钮偶发不响应（参见 MyButton.swift 顶部说明）。
+/// 这里用 SwiftUI 原生的 configuration.isPressed 实现视觉反馈，按钮的
+/// click 就不会被任何额外 gesture 干扰。
+private struct RoundedButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.90 : 1)
+            .animation(.easeInOut(duration: 0.10), value: configuration.isPressed)
+    }
+}
+
 struct RoundedButton<Content: View>: View {
     let content: () -> Content
     let onClick: () -> Void
-    
-    @State private var isHovered: Bool = false
-    @State private var isPressed: Bool = false
-    
+
     var body: some View {
-        content()
-            .padding()
-            .background(
-                RoundedRectangle(cornerRadius: .infinity)
-                    .fill(AppSettings.shared.theme.getAccentColor())
-            )
-            .scaleEffect(isPressed ? 0.85 : 1.0)
-            .animation(.easeInOut(duration: 0.2), value: isHovered)
-            .animation(.easeInOut(duration: 0.2), value: isPressed)
-            .onHover {
-                isHovered = $0
-            }
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { _ in
-                        isPressed = true
-                    }
-                    .onEnded { value in
-                        if isPressed {
-                            onClick()
-                        }
-                        isPressed = false
-                    }
-            )
+        Button(action: onClick) {
+            content()
+                .padding()
+                .background(
+                    RoundedRectangle(cornerRadius: .infinity)
+                        .fill(AppSettings.shared.theme.getAccentColor())
+                )
+                .contentShape(Circle())
+        }
+        .buttonStyle(RoundedButtonStyle())
     }
 }

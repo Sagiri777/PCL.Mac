@@ -29,14 +29,19 @@ public struct Update {
 
 public class UpdateCheck {
     public static func getLastUpdate() async -> Update? {
+        var headers = [
+            "Accept": "application/vnd.github+json"
+        ]
+        if let artifactPAT = Secrets.getArtifactPAT() {
+            headers["Authorization"] = "Bearer \(artifactPAT)"
+        }
         if let json = await Requests.get(
             "https://api.github.com/repos/PCL-Community/PCL.Mac/actions/artifacts",
-            headers: [
-                "Accept": "application/vnd.github+json",
-                "Authorization": "Bearer \(ARTIFACT_PAT)"
-            ]
+            headers: headers
         ).json {
-            let artifact = json["artifacts"].arrayValue[0]
+            guard let artifact = json["artifacts"].arrayValue.first else {
+                return nil
+            }
             let formatter = ISO8601DateFormatter()
             let date = formatter.date(from: artifact["created_at"].stringValue)!
             log("最新工件构建时间: \(SharedConstants.shared.dateFormatter.string(from: date))")
@@ -50,7 +55,9 @@ public class UpdateCheck {
         var request = URLRequest(url: update.url)
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        request.setValue("Bearer \(ARTIFACT_PAT)", forHTTPHeaderField: "Authorization")
+        if let artifactPAT = Secrets.getArtifactPAT() {
+            request.setValue("Bearer \(artifactPAT)", forHTTPHeaderField: "Authorization")
+        }
 
         let config = URLSessionConfiguration.default
         let session = URLSession(configuration: config, delegate: NoRedirectSessionDelegate(), delegateQueue: nil)

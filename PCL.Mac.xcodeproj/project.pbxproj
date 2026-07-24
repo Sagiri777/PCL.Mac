@@ -91,12 +91,19 @@
 				Minecraft/Login/Account/MicrosoftAccount.swift,
 				Minecraft/Login/Account/OfflineAccount.swift,
 				Minecraft/Login/Account/YggdrasilAccount.swift,
+
+				Minecraft/Login/BrowserLoginController.swift,
+				Minecraft/Login/BrowserLoginView.swift,
 				Minecraft/Login/MsLogin.swift,
 				Minecraft/MinecraftCrashHandler.swift,
 				Minecraft/MinecraftDirectory.swift,
 				Minecraft/MinecraftInstance.swift,
+
+
 				Minecraft/MinecraftVersion.swift,
 				Minecraft/Mod/Loader/Fabric/FabricInstaller.swift,
+
+
 				Minecraft/Mod/Loader/Fabric/FabricManifest.swift,
 				Minecraft/Mod/Loader/Forge/ForgeInstaller.swift,
 				Minecraft/Mod/Loader/Forge/ForgeInstallProfile.swift,
@@ -143,6 +150,8 @@
 				Minecraft/Login/Account/MicrosoftAccount.swift,
 				Minecraft/Login/Account/OfflineAccount.swift,
 				Minecraft/Login/Account/YggdrasilAccount.swift,
+				Minecraft/Login/BrowserLoginController.swift,
+				Minecraft/Login/BrowserLoginView.swift,
 				Minecraft/Login/MsLogin.swift,
 				Minecraft/MinecraftCrashHandler.swift,
 				Minecraft/MinecraftDirectory.swift,
@@ -229,6 +238,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				EC3C3C4F2E2134A90033107E /* SwiftyJSON in Frameworks */,
+				ECFF69BF2E542EFF000625FA /* ZIPFoundation in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -330,6 +340,7 @@
 			name = PCL.Mac.Core;
 			packageProductDependencies = (
 				EC3C3C4E2E2134A90033107E /* SwiftyJSON */,
+				ECFF69BE2E542EFF000625FA /* ZIPFoundation */,
 			);
 			productName = PCL.Mac.Core;
 			productReference = EC422DA32E2082D900FE8309 /* PCL_Mac_Core.framework */;

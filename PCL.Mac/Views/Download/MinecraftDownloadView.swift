@@ -89,8 +89,9 @@ struct MinecraftDownloadView: View {
                         if let versions = self.versions {
                             CategoryCard(index: 1, label: "正式版", versions: versions["release"]!, parent: self)
                             CategoryCard(index: 2, label: "预览版", versions: versions["snapshot"]!, parent: self)
-                            CategoryCard(index: 3, label: "远古版", versions: versions["old"]!, parent: self)
-                            CategoryCard(index: 4, label: "愚人节版", versions: versions["april_fool"]!, parent: self)
+                            // 远古版与愚人节版默认折叠：版本数量大（数百），初始不渲染可显著减少首次 layout pass。
+                            CategoryCard(index: 3, label: "远古版", versions: versions["old"]!, parent: self, startCollapsed: true)
+                            CategoryCard(index: 4, label: "愚人节版", versions: versions["april_fool"]!, parent: self, startCollapsed: true)
                         }
                         Spacer()
                     }
@@ -125,9 +126,13 @@ fileprivate struct CategoryCard: View {
     let label: String
     let versions: [VersionManifest.GameVersion]
     let parent: MinecraftDownloadView
-    
+    /// 是否初始折叠。远古/愚人节版本数量大，进入下载页时不展开可显著减少首次 layout 成本。
+    var startCollapsed: Bool = false
+
     var body: some View {
-        MyCard(index: index, title: "\(label) (\(versions.count))") {
+        MyCard(index: index,
+               title: "\(label) (\(versions.count))",
+               unfoldBinding: .constant(!startCollapsed)) {
             LazyVStack {
                 ForEach(versions, id: \.self) { version in
                     VersionView(version: version, parent: parent)

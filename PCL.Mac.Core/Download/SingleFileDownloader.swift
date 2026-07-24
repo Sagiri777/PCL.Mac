@@ -14,6 +14,7 @@ public class SingleFileDownloader {
         url: URL,
         destination: URL,
         replaceMethod: ReplaceMethod = .skip,
+        networkCategory: NetworkCategory = .gameDownload,
         progress: ((Double) -> Void)? = nil
     ) async throws {
         // 若文件已存在，且指定了在存在时跳过，直接返回
@@ -29,7 +30,8 @@ public class SingleFileDownloader {
         request.setValue("PCL.Mac/\(SharedConstants.shared.version)", forHTTPHeaderField: "User-Agent")
         
         // 发送请求
-        let (byteStream, response) = try await URLSession.shared.bytes(for: request)
+        let session = Requests.makeSession(forceUseProxy: Requests.shouldUseProxy(for: networkCategory))
+        let (byteStream, response) = try await session.bytes(for: request)
         
         // 判断响应码是否正确
         if let http = response as? HTTPURLResponse,

@@ -118,15 +118,59 @@ struct VersionListView: View {
         }
     }
     var body: some View {
+        // 三态：isLoading / loadError / instances.isEmpty / 非空。
+        // 关键规则：永远不要让"加载中……"在没有 IO 进行中的情况下显示；调用方必须保证
+        // loadInnerInstances 完成后 isLoading 回 false（由 MinecraftDirectory 端负责）。
         VStack {
-            if minecraftDirectory.instances.isEmpty {
-                ZStack {
-                    Spacer()
-                        .frame(maxWidth: .infinity)
+            if minecraftDirectory.isLoading
+                && minecraftDirectory.instances.isEmpty
+                && minecraftDirectory.loadError == nil {
+                // 正在加载 —— 显式 spinner + 文字
+                VStack(spacing: 10) {
+                    ProgressView()
+                        .scaleEffect(0.8)
                     Text("加载中……")
                         .foregroundStyle(Color("TextColor"))
                         .font(.custom("PCL English", size: 14))
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let err = minecraftDirectory.loadError,
+                      minecraftDirectory.instances.isEmpty {
+                // 加载失败 —— 给出错误信息和"重试"按钮
+                VStack(spacing: 12) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 36))
+                        .foregroundStyle(Color(hex: 0xF50000))
+                    Text("读取版本目录失败")
+                        .font(.custom("PCL English", size: 16))
+                        .foregroundStyle(Color("TextColor"))
+                    Text(err)
+                        .font(.custom("PCL English", size: 12))
+                        .foregroundStyle(Color(hex: 0x8C8C8C))
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 24)
+                    MyButton(text: "重试") {
+                        loadInstances(minecraftDirectory)
+                    }
+                    .frame(width: 120, height: 30)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if minecraftDirectory.instances.isEmpty {
+                // 加载成功，但目录里确实没版本 —— 引导用户去添加版本
+                VStack(spacing: 12) {
+                    Image(systemName: "folder.badge.plus")
+                        .font(.system(size: 36))
+                        .foregroundStyle(Color(hex: 0x8C8C8C))
+                    Text("该文件夹还没有版本实例")
+                        .font(.custom("PCL English", size: 16))
+                        .foregroundStyle(Color("TextColor"))
+                    Text("前往 \"下载\" 页面安装，或将现有版本文件夹拖入此窗口。")
+                        .font(.custom("PCL English", size: 12))
+                        .foregroundStyle(Color(hex: 0x8C8C8C))
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 24)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
                     let notVanillaVersions = minecraftDirectory.instances.filter { $0.brand != .vanilla }

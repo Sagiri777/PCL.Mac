@@ -168,15 +168,18 @@ struct LaunchView: View {
     
     var body: some View {
         ScrollView {
-            if let announcement = announcementManager.latest {
-                announcement.createView(showHistoryButton: true)
+            if AppSettings.shared.showAnnouncements,
+               let announcement = announcementManager.latest {
+                announcement.createView(showHistoryButton: true) {
+                    DataManager.shared.router.append(.announcementHistory)
+                }
                     .padding()
             }
             
-            if SharedConstants.shared.isDevelopment {
+            if SharedConstants.shared.isDevelopment && AppSettings.shared.showDevelopmentWarning {
                 StaticMyCard(index: 0, title: "警告") {
                     VStack(spacing: 4) {
-                        Text("你正在使用开发版本的 PCL.Mac！")
+                        Text("你正在使用本地开发版本的 PCL.Mac Liquid Glass Edition！")
                             .font(.custom("PCL English", size: 14))
                         HStack(spacing: 4) {
                             Text("如果遇到问题请")
@@ -184,7 +187,7 @@ struct LaunchView: View {
                             Text("点击此处反馈")
                                 .font(.custom("PCL English", size: 14))
                                 .onTapGesture {
-                                    NSWorkspace.shared.open(URL(string: "https://github.com/PCL-Community/PCL.Mac/issues/new?template=bug-反馈.md")!)
+                                    NSWorkspace.shared.open(SharedConstants.shared.projectURL)
                                 }
                                 .foregroundStyle(AppSettings.shared.theme.getTextStyle())
                         }
@@ -193,17 +196,27 @@ struct LaunchView: View {
                 }
                 .padding()
                 
+            }
+
+            if SharedConstants.shared.isDevelopment && AppSettings.shared.showDevelopmentLogs {
                 StaticMyCard(index: 1, title: "日志") {
                     VStack {
-                        ScrollView(.horizontal) {
-                            VStack(alignment: .leading, spacing: 4) {
+                        // 自适应：ScrollView 默认纵向滚；高度封顶避免撑爆主界面；
+                        // 单 log 行 → 走单行 truncate，让 log row 自然适配卡片宽度，
+                        // 不再被 .fixedSize 反向撑出卡片边界（之前 [.h, .v] 路线穿透父约束的 chain）。
+                        // 长 log 全内容请走下方"打开日志"在 Finder 里看。
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 4) {
                                 ForEach(LogStore.shared.logLines) { logLine in
                                     logLineView(logLine.string)
                                         .foregroundStyle(Color("TextColor"))
                                 }
                             }
+                            .padding(.horizontal, 6)
+                            .padding(.bottom, 8)
                         }
                         .scrollIndicators(.never)
+                        .frame(maxHeight: 240)
                         .padding(.top, 5)
                         
                         MyButton(text: "打开日志") {
@@ -251,13 +264,21 @@ struct LaunchView: View {
                 Text(tag)
                     .font(.custom("PCL English", size: 14))
                     .foregroundColor(color)
+                    .lineLimit(1)
+                // 单行 + truncate：让 log row 自动适配卡片宽，不论 log 多长都不会反向撑出卡片。
+                // 完整长 log 走下方"打开日志"按钮看完整文件。
                 Text(rest)
                     .font(.custom("PCL English", size: 14))
+                    .foregroundStyle(Color("TextColor"))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
             }
         } else {
             HStack {
                 Text(line)
                     .font(.custom("PCL English", size: 14))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
             }
         }
     }

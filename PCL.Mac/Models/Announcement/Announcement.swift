@@ -9,14 +9,15 @@ import SwiftUI
 import SwiftyJSON
 
 struct Announcement: Identifiable {
-    @ObservedObject private var dataManager: DataManager = .shared
-    
+    // 移除 view 内部的 @ObservedObject DataManager，避免每个公告订阅 DataManager。
+    // "查看历史公告" 跳转通过 init/onShowHistory 闭包传入，调用方负责管理生命周期。
+
     public let id: UUID = .init()
     public let title: String
     public let body: [Body]
     public let time: Date
     public let author: String
-    
+
     init(_ json: JSON) {
         let formatter = ISO8601DateFormatter()
         self.title = json["title"].stringValue
@@ -24,8 +25,8 @@ struct Announcement: Identifiable {
         self.time = formatter.date(from: json["time"].stringValue) ?? Date(timeIntervalSince1970: 0)
         self.author = json["author"].stringValue
     }
-    
-    func createView(showHistoryButton: Bool = false) -> some View {
+
+    func createView(showHistoryButton: Bool = false, onShowHistory: (() -> Void)? = nil) -> some View {
         MyCard(title: "公告 | \(title)") {
             VStack {
                 VStack(alignment: .leading, spacing: 10) {
@@ -44,7 +45,7 @@ struct Announcement: Identifiable {
                                 .scaledToFit()
                         }
                     }
-                    
+
                     HStack {
                         Spacer()
                         Text("—— \(self.author) \(SharedConstants.shared.dateFormatter.string(from: self.time))")
@@ -55,7 +56,12 @@ struct Announcement: Identifiable {
                 .padding()
                 if showHistoryButton {
                     MyButton(text: "历史公告") {
-                        self.dataManager.router.append(.announcementHistory)
+                        if let onShowHistory {
+                            onShowHistory()
+                        } else {
+                            // 兼容旧调用点：未提供闭包时退回原行为。
+                            DataManager.shared.router.append(.announcementHistory)
+                        }
                     }
                     .frame(height: 40)
                     .padding(1)

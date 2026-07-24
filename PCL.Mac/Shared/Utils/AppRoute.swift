@@ -41,8 +41,12 @@ public enum AppRoute: Hashable {
     case personalization
     case javaSettings
     case otherSettings
-    case themeUnlock
     
+    /// 是否应显示统一返回按钮。只要路由栈中还有上一层就显示，避免依赖各页面自行实现。
+    var showsBackButton: Bool {
+        DataManager.shared.router.path.count > 1
+    }
+
     var isRoot: Bool {
         switch self {
         case .launch, .download, .multiplayer, .settings, .others,
@@ -76,8 +80,7 @@ public enum AppRoute: Hashable {
         case .announcementHistory: "历史公告"
         case .versionSettings, .instanceOverview, .instanceSettings, .instanceMods: "版本设置 - \(AppSettings.shared.defaultInstance ?? "")"
         case .javaDownload: "Java 下载"
-        case .themeUnlock: "主题解锁"
-        default: "发现问题请在 https://github.com/PCL-Community/PCL.Mac/issues/new 上反馈！"
+        default: SharedConstants.shared.editionName
         }
     }
     
@@ -124,8 +127,6 @@ public class AppRouter: ObservableObject {
             VersionSettingsView()
         case .javaDownload:
             JavaInstallView()
-        case .themeUnlock:
-            ThemeUnlockView()
         }
     }
     

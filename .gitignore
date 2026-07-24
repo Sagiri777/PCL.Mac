@@ -5,6 +5,22 @@ _MACOSX
 # Xcode
 PCL.Mac.xcodeproj/xcuserdata
 PCL.Mac.xcodeproj/project.xcworkspace/xcuserdata
+*.xcuserstate
+DerivedData/
+build/
+.build/
 
 # Secrets
 Secrets.xcconfig
+
+# Release artifacts
+dist/
+*.xcarchive
+*.xcresult
+*.dSYM
+*.zip
+*.dmg
+*.pkg
+*.profraw
+*.log
+*.har

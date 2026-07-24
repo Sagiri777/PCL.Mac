@@ -32,7 +32,7 @@ public class ModrinthProjectSearcher {
     }
     
     public func get(_ id: String) async throws -> ProjectSummary {
-        return .init(json: try await Requests.get("https://api.modrinth.com/v2/project/\(id)", ignoredFailureStatusCodes: [404]).getJSONOrThrow())
+        return .init(json: try await Requests.get("https://api.modrinth.com/v2/project/\(id)", ignoredFailureStatusCodes: [404], category: .gameDownload).getJSONOrThrow())
     }
     
     private func getDependencies(_ json: JSON) async -> [ProjectDependency] {
@@ -63,7 +63,7 @@ public class ModrinthProjectSearcher {
     }
     
     public func getVersion(_ version: String) async throws -> ProjectVersion {
-        let json = try await Requests.get("https://api.modrinth.com/v2/version/\(version)").getJSONOrThrow()
+        let json = try await Requests.get("https://api.modrinth.com/v2/version/\(version)", category: .gameDownload).getJSONOrThrow()
         let summary = try await get(json["project_id"].stringValue)
         
         return .init(
@@ -82,7 +82,7 @@ public class ModrinthProjectSearcher {
     }
     
     public func getVersionMap(id: String) async throws -> ProjectVersionMap {
-        let json = try await Requests.get("https://api.modrinth.com/v2/project/\(id)/version").getJSONOrThrow()
+        let json = try await Requests.get("https://api.modrinth.com/v2/project/\(id)/version", category: .gameDownload).getJSONOrThrow()
         let summary = try await get(json.arrayValue[0]["project_id"].stringValue)
         var versionMap: ProjectVersionMap = [:]
         

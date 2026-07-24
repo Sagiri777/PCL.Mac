@@ -46,7 +46,7 @@ enum PopupType {
     }
 }
 
-struct PopupOverlay: View, Identifiable, Equatable {
+struct PopupOverlay: View {
     @ObservedObject private var popupManager: PopupManager = .shared
     
     @State private var stateNoAnim: PopupAnimationState = PopupManager.shared.popupState
@@ -56,15 +56,10 @@ struct PopupOverlay: View, Identifiable, Equatable {
     
     private let model: PopupModel
     
-    public let id: UUID = UUID()
-    
     public init(_ model: PopupModel) {
         self.model = model
     }
     
-    public static func == (_ var1: PopupOverlay, _ var2: PopupOverlay) -> Bool {
-        return var1.id == var2.id
-    }
     
     var body: some View {
         ZStack {

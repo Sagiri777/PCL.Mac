@@ -33,41 +33,32 @@ struct MyComboBoxItemView<Option: Hashable>: View {
     @State private var isHovered: Bool = false
     
     var body: some View {
-        HStack {
-            ZStack {
-                Circle()
-                    .stroke(lineWidth: 1)
-                    .frame(width: outerLength)
-                
-                if selection == value {
-                    Circle()
-                        .frame(width: 10)
+        Button(action: select) {
+            HStack(spacing: 8) {
+                ZStack {
+                    Circle().stroke(lineWidth: 1).frame(width: outerLength)
+                    if selection == value { Circle().frame(width: 10) }
                 }
+                .foregroundStyle(selection == value ? AppSettings.shared.theme.getTextStyle() : AnyShapeStyle(.primary))
+                .frame(width: 20, height: 20)
+                Text(text).font(.custom("PCL English", size: 14))
+                Spacer(minLength: 0)
             }
-            .foregroundStyle(selection == value ? AppSettings.shared.theme.getTextStyle() : AnyShapeStyle(.primary))
-            .frame(width: 20, height: 20)
-            Text(text)
-                .font(.custom("PCL English", size: 14))
+            .frame(maxWidth: .infinity, minHeight: 26, alignment: .leading)
+            .foregroundStyle(isHovered ? AppSettings.shared.theme.getTextStyle() : AnyShapeStyle(Color("TextColor")))
+            .contentShape(Rectangle())
         }
-        .foregroundStyle(isHovered ? AppSettings.shared.theme.getTextStyle() : AnyShapeStyle(Color("TextColor")))
-        .background(Color.clear)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            if selection != value {
-                selection = value
-                withAnimation(.spring(duration: 0.15)) {
-                    outerLength = 10
-                }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                    withAnimation(.spring(response: 0.5, dampingFraction: 0.65, blendDuration: 0.2)) {
-                        outerLength = 20
-                    }
-                }
-            }
-        }
+        .buttonStyle(.plain)
         .animation(.easeInOut(duration: 0.2), value: isHovered)
-        .onHover { isHovered in
-            self.isHovered = isHovered
+        .onHover { isHovered = $0 }
+    }
+
+    private func select() {
+        guard selection != value else { return }
+        selection = value
+        withAnimation(.spring(duration: 0.15)) { outerLength = 10 }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            withAnimation(.spring(response: 0.5, dampingFraction: 0.65)) { outerLength = 20 }
         }
     }
 }

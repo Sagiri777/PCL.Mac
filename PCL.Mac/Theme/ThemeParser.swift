@@ -37,8 +37,49 @@ public class ThemeParser {
         let mainStyle = parseStyle(json["mainStyle"], images)
         let backgroundStyle = parseStyle(json["backgroundStyle"], images)
         let textStyle = parseStyle(json["textStyle"].exists() ? json["textStyle"] : json["titleStyle"])
-        
-        return Theme(id: id, accentColor: accentColor, mainStyle: mainStyle, backgroundStyle: backgroundStyle, textStyle: textStyle)
+        let glass = parseGlass(json["glass"])
+
+        return Theme(id: id, accentColor: accentColor, mainStyle: mainStyle, backgroundStyle: backgroundStyle, textStyle: textStyle, glass: glass)
+    }
+
+    /// 解析液态玻璃配置块（可选）。
+    /// example:
+    /// "glass": {
+    ///   "enabled": true,
+    ///   "cardBlur": 0.5,
+    ///   "panelBlur": 0.4,
+    ///   "backgroundBlur": 0.3,
+    ///   "tintColor": "#1370F3",
+    ///   "borderColor": "#1370F3"
+    /// }
+    public func parseGlass(_ json: JSON) -> GlassConfig? {
+        guard json.exists() else { return nil }
+        let enabled = json["enabled"].bool ?? true
+        let cardBlur = json["cardBlur"].doubleValue
+        let panelBlur = json["panelBlur"].double
+        let backgroundBlur = json["backgroundBlur"].doubleValue
+        let tint = json["tintColor"].string.map { parseColorString($0) }
+        let border = json["borderColor"].string.map { parseColorString($0) }
+        return GlassConfig(enabled: enabled, cardBlur: cardBlur, panelBlur: panelBlur, backgroundBlur: backgroundBlur,
+                            tintColor: tint, borderColor: border)
+    }
+
+    /// 把 "#RRGGBB" / "#AARRGGBB" / hsl(...) 字符串直接解析为 Color，不走 JSON 节点路径。
+    public func parseColorString(_ str: String) -> Color {
+        if str.starts(with: "#") {
+            let hexStr = String(str.dropFirst())
+            if hexStr.count == 6, let rgbInt = UInt(hexStr, radix: 16) {
+                return Color(hex: rgbInt)
+            } else if hexStr.count == 8, let argbInt = UInt(hexStr, radix: 16) {
+                let alpha = Double((argbInt >> 24) & 0xFF) / 255.0
+                let rgb = argbInt & 0xFFFFFF
+                return Color(hex: rgb, alpha: alpha)
+            }
+        } else if let match = str.wholeMatch(of: /hsl\(\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\s*\)/),
+                  let h = Double(match.1), let s = Double(match.2), let l = Double(match.3) {
+            return Color(h2: h, s2: s, l2: l)
+        }
+        return Color(hex: 0x000000)
     }
     
     public func parseStyle(_ json: JSON, _ images: [NSImage] = []) -> AnyShapeStyle {
