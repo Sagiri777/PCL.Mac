@@ -85,6 +85,7 @@ public class MinecraftDirectory: Codable, Identifiable, Hashable {
                 )
                 let instanceDirectories = contents.filter { url in
                     (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+                    && fm.fileExists(atPath: url.appending(path: "\(url.lastPathComponent).json").path)
                 }
                 for instanceDirectory in instanceDirectories {
                     if let instance = MinecraftInstance.create(self, instanceDirectory) {

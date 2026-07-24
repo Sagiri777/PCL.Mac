@@ -15,6 +15,7 @@ struct ContentView: View {
     @ObservedObject private var settings: AppSettings = .shared
 
     @State private var isLeftTabVisible = true
+    @State private var isGlobalDropHovering = false
 
     var installTaskButtonOverlay: some View {
         Group {
@@ -76,6 +77,7 @@ struct ContentView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             if SharedConstants.shared.isDevelopment && settings.showCurrentRoute { routerOverlay }
+            if isGlobalDropHovering { globalDropOverlay }
             installTaskButtonOverlay
             ProjectQueueOverlay()
             hintOverlay
@@ -87,6 +89,17 @@ struct ContentView: View {
         .sheet(isPresented: $browserLogin.isPresented) {
             BrowserLoginView()
         }
+        .dropDestination(for: URL.self) { urls, _ in
+            let captured = urls
+            Task {
+                await handleGlobalDrop(urls: captured)
+            }
+            return true
+        } isTargeted: { hovering in
+            withAnimation(.easeInOut(duration: 0.15)) {
+                isGlobalDropHovering = hovering
+            }
+        }
         .onAppear {
             if !AppStartTracker.shared.finished {
                 AppStartTracker.shared.finished = true
@@ -94,6 +107,77 @@ struct ContentView: View {
                 log("主界面加载完成, App 启动总耗时 \(cost)ms")
             }
         }
+    }
+
+    private var globalDropOverlay: some View {
+        ZStack {
+            settings.effectiveAccentColor.opacity(0.16)
+            VStack(spacing: 10) {
+                Image(systemName: "tray.and.arrow.down.fill")
+                    .font(.system(size: 54, weight: .medium))
+                Text("松开以导入")
+                    .font(.custom("PCL English", size: 20))
+                Text("支持整合包、Mod 与资源压缩包")
+                    .font(.custom("PCL English", size: 12))
+                    .opacity(0.72)
+            }
+            .foregroundStyle(settings.effectiveThemeStyle)
+            .padding(36)
+        }
+        .background(.ultraThinMaterial.opacity(0.55))
+        .allowsHitTesting(false)
+        .transition(.opacity)
+        .zIndex(20)
+    }
+
+    private func handleGlobalDrop(urls rawURLs: [URL]) async {
+        guard !rawURLs.isEmpty else { return }
+        let classification = ModInstaller.classify(rawURLs)
+        guard classification.hasAny else {
+            hint("未识别任何可导入内容", .critical)
+            return
+        }
+
+        var importedPacks = 0
+        var installedMods = 0
+        var failed = 0
+
+        if !classification.modpacks.isEmpty {
+            guard let directory = AppSettings.shared.currentMinecraftDirectory else {
+                hint("请先选择 Minecraft 文件夹！", .critical)
+                return
+            }
+            hint("正在导入 \(classification.modpacks.count) 个整合包……")
+            for packURL in classification.modpacks {
+                do {
+                    _ = try await ModpackImporter.install(zipURL: packURL, into: directory)
+                    importedPacks += 1
+                } catch {
+                    failed += 1
+                    err("整合包 \(packURL.lastPathComponent) 导入失败：\(error.localizedDescription)")
+                }
+            }
+            if importedPacks > 0 {
+                directory.loadInnerInstances()
+            }
+        }
+
+        if !classification.mods.isEmpty {
+            if let instance = dataManager.defaultInstance {
+                let summary = await ModInstaller.install(dropped: classification.mods, into: instance)
+                installedMods += summary.installedJars
+                failed += summary.failures.count
+            } else {
+                failed += classification.mods.count
+                warn("拖入了 Mod 文件，但当前没有默认实例。")
+            }
+        }
+
+        var parts: [String] = []
+        if importedPacks > 0 { parts.append("已导入 \(importedPacks) 个整合包") }
+        if installedMods > 0 { parts.append("已安装 \(installedMods) 个 mod") }
+        if failed > 0 { parts.append("失败 \(failed) 项") }
+        hint(parts.isEmpty ? "没有可导入内容" : parts.joined(separator: "，"), failed > 0 ? .critical : .finish)
     }
 
     @ViewBuilder

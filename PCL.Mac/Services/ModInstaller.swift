@@ -188,12 +188,22 @@ public enum ModInstaller {
     }
 
     /// 判定一个 zip 是 "mods 压缩包" 还是 "整合包"。
-    /// - 整合包必含 `manifest.json` 或 `modrinth.index.json`
+    /// - 整合包可以是 `manifest.json` / `modrinth.index.json` / 嵌套 modpack / `.minecraft/versions/...`
     /// - mods 压缩包至少要有一个 `.jar`，且不含以上两种 manifest
     public static func classifyZip(_ zipURL: URL) -> Format {
-        guard let archive = try? Archive(url: zipURL, accessMode: .read) else { return .unknown }
+        guard let archive = Archive(url: zipURL, accessMode: .read) else { return .unknown }
         let entries = Array(archive)
-        if entries.contains(where: { $0.path == "modrinth.index.json" || $0.path == "manifest.json" }) {
+        if entries.contains(where: {
+            let path = $0.path.replacingOccurrences(of: "\\", with: "/").lowercased()
+            return path == "modrinth.index.json" ||
+                path == "manifest.json" ||
+                path == "modpack.mrpack" ||
+                path == "modpack.zip" ||
+                path.contains(".minecraft/versions/")
+        }) {
+            return .modpack
+        }
+        if (try? ModpackImporter.detectFormat(of: zipURL)) != .unknown {
             return .modpack
         }
         let hasJar = entries.contains { entry in

@@ -17,97 +17,160 @@ public class SingleFileDownloader {
         networkCategory: NetworkCategory = .gameDownload,
         progress: ((Double) -> Void)? = nil
     ) async throws {
-        // 若文件已存在，且指定了在存在时跳过，直接返回
         if FileManager.default.fileExists(atPath: destination.path) && replaceMethod == .skip {
             task?.completeOneFile()
             progress?(1)
             return
         }
         
-        // 创建请求并设置 User-Agent
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.setValue("PCL.Mac/\(SharedConstants.shared.version)", forHTTPHeaderField: "User-Agent")
         
-        // 发送请求
-        let session = Requests.makeSession(forceUseProxy: Requests.shouldUseProxy(for: networkCategory))
-        let (byteStream, response) = try await session.bytes(for: request)
-        
-        // 判断响应码是否正确
-        if let http = response as? HTTPURLResponse,
-           !(200..<300).contains(http.statusCode) {
-            err("无法下载 \(destination.lastPathComponent): \(url.host()!) 返回了 \(http.statusCode)")
-            throw MyLocalizedError(reason: "远程服务器返回了 \(http.statusCode)。")
+        let delegate = SingleFileDownloadDelegate(
+            destination: destination,
+            replaceMethod: replaceMethod,
+            task: task,
+            progress: progress
+        )
+        let session = URLSession(
+            configuration: Requests.makeConfiguration(forceUseProxy: Requests.shouldUseProxy(for: networkCategory)),
+            delegate: delegate,
+            delegateQueue: nil
+        )
+        defer {
+            session.invalidateAndCancel()
         }
-        
-        // 创建临时文件
-        let tempURL = SharedConstants.shared.temperatureURL.appendingPathComponent(UUID().uuidString)
-        FileManager.default.createFile(atPath: tempURL.path, contents: nil)
-        
-        let handle = try FileHandle(forWritingTo: tempURL)
-        
-        let expectedLength = response.expectedContentLength
-        var received: Int64 = 0
-        
-        var buffer = [UInt8]()
-        buffer.reserveCapacity(64 * 1024)
-        
-        var lastProgressReportTime = CFAbsoluteTimeGetCurrent()
-        
-        if expectedLength > 0 {
-            progress?(0.0)
-        } else {
-            progress?(-1)
-        }
-        
-        // 从流读取每个字节
-        for try await byte in byteStream {
-            buffer.append(byte)
-            received &+= 1
-            
-            // 若缓冲区已满，写入到文件并清空
-            if buffer.count >= 64 * 1024 {
-                await SpeedMeter.shared.addBytes(64 * 1024)
-                try Task.checkCancellation()
-                handle.write(Data(buffer))
-                buffer.removeAll(keepingCapacity: true)
-            }
-            
-            // 调用 progress 回调
-            if expectedLength > 0 {
-                let now = CFAbsoluteTimeGetCurrent()
-                if now - lastProgressReportTime >= 0.1 {
-                    let downloadProgress = Double(received) / Double(expectedLength)
-                    await MainActor.run {
-                        task?.currentStagePercentage = downloadProgress
-                        progress?(downloadProgress)
-                    }
-                    lastProgressReportTime = now
-                }
-            }
-        }
-        
-        // 如果缓冲区还有数据，全部写入到文件
-        if !buffer.isEmpty {
-            handle.write(Data(buffer))
-            buffer.removeAll(keepingCapacity: false)
-        }
-        
-        // 移动临时文件到目标位置
-        if FileManager.default.fileExists(atPath: destination.path) {
-            if replaceMethod == .replace {
-                try FileManager.default.removeItem(at: destination)
-            } else if replaceMethod == .throw {
-                throw MyLocalizedError(reason: "\(destination.lastPathComponent) 已存在。")
-            }
-            
-        } else {
-            try? FileManager.default.createDirectory(at: destination.parent(), withIntermediateDirectories: true)
-        }
-        
-        try FileManager.default.moveItem(at: tempURL, to: destination)
-        
+
+        try await delegate.start(request: request, session: session)
         task?.completeOneFile()
         progress?(1.0)
+    }
+}
+
+private final class SingleFileDownloadDelegate: NSObject, URLSessionDownloadDelegate {
+    private let destination: URL
+    private let replaceMethod: ReplaceMethod
+    private weak var task: InstallTask?
+    private let progress: ((Double) -> Void)?
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Void, Error>?
+    private var downloadTask: URLSessionDownloadTask?
+    private var finished = false
+    private var lastWritten: Int64 = 0
+
+    init(
+        destination: URL,
+        replaceMethod: ReplaceMethod,
+        task: InstallTask?,
+        progress: ((Double) -> Void)?
+    ) {
+        self.destination = destination
+        self.replaceMethod = replaceMethod
+        self.task = task
+        self.progress = progress
+    }
+
+    func start(request: URLRequest, session: URLSession) async throws {
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                self.lock.lock()
+                self.continuation = continuation
+                self.lock.unlock()
+
+                let downloadTask = session.downloadTask(with: request)
+                self.downloadTask = downloadTask
+                downloadTask.resume()
+            }
+        } onCancel: {
+            self.downloadTask?.cancel()
+        }
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        downloadTask: URLSessionDownloadTask,
+        didWriteData bytesWritten: Int64,
+        totalBytesWritten: Int64,
+        totalBytesExpectedToWrite: Int64
+    ) {
+        let delta = totalBytesWritten - lastWritten
+        lastWritten = totalBytesWritten
+        Task { await SpeedMeter.shared.addBytes(Int(delta)) }
+
+        guard totalBytesExpectedToWrite > 0 else {
+            progress?(-1)
+            return
+        }
+        let value = Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)
+        Task { @MainActor in
+            self.task?.currentStagePercentage = value
+            self.progress?(value)
+        }
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        downloadTask: URLSessionDownloadTask,
+        didFinishDownloadingTo location: URL
+    ) {
+        do {
+            if FileManager.default.fileExists(atPath: destination.path) {
+                switch replaceMethod {
+                case .replace:
+                    try FileManager.default.removeItem(at: destination)
+                case .throw:
+                    throw MyLocalizedError(reason: "\(destination.lastPathComponent) 已存在。")
+                case .skip:
+                    break
+                }
+            } else {
+                try FileManager.default.createDirectory(at: destination.parent(), withIntermediateDirectories: true)
+            }
+
+            if replaceMethod != .skip || !FileManager.default.fileExists(atPath: destination.path) {
+                try FileManager.default.moveItem(at: location, to: destination)
+            }
+        } catch {
+            resumeOnce(with: .failure(error))
+        }
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didCompleteWithError error: Error?
+    ) {
+        if let error {
+            resumeOnce(with: .failure(error))
+            return
+        }
+
+        if let response = task.response as? HTTPURLResponse,
+           !(200..<300).contains(response.statusCode) {
+            resumeOnce(with: .failure(MyLocalizedError(reason: "远程服务器返回了 \(response.statusCode)。")))
+            return
+        }
+
+        resumeOnce(with: .success(()))
+    }
+
+    private func resumeOnce(with result: Result<Void, Error>) {
+        lock.lock()
+        guard !finished else {
+            lock.unlock()
+            return
+        }
+        finished = true
+        let continuation = continuation
+        self.continuation = nil
+        lock.unlock()
+
+        switch result {
+        case .success:
+            continuation?.resume()
+        case .failure(let error):
+            continuation?.resume(throwing: error)
+        }
     }
 }

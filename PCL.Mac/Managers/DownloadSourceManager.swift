@@ -16,6 +16,17 @@ public class DownloadSourceManager: DownloadSource {
     private var lastTestDate: Date = .init(timeIntervalSince1970: 0)
     private var fileDownloadSource: DownloadSource
     private var versionManifestSource: DownloadSource
+
+    public var recommendedConcurrency: Int {
+        switch AppSettings.shared.fileDownloadSource {
+        case .official:
+            return 48
+        case .mirror:
+            return 16
+        case .both:
+            return fileDownloadSource is BMCLAPIDownloadSource ? 16 : 48
+        }
+    }
     
     public func getDownloadSource() -> DownloadSource {
         if AppSettings.shared.fileDownloadSource == .both {
@@ -51,6 +62,16 @@ public class DownloadSourceManager: DownloadSource {
     public func getLibraryURL(_ library: ClientManifest.Library) -> URL? {
         getDownloadSource().getLibraryURL(library)
     }
+
+    public func candidateURLs(for url: URL) -> [URL] {
+        let official = [url]
+        let mirror = mirrorURL(for: url).map { [$0] } ?? []
+        let preferMirror = AppSettings.shared.fileDownloadSource == .mirror ||
+            (AppSettings.shared.fileDownloadSource == .both && fileDownloadSource is BMCLAPIDownloadSource)
+        let merged = preferMirror ? (mirror + official) : (official + mirror)
+        var seen = Set<URL>()
+        return merged.filter { seen.insert($0).inserted }
+    }
     
     private func testSpeed(_ url: URLConvertible, _ source: inout DownloadSource) async {
         source = official
@@ -76,5 +97,45 @@ public class DownloadSourceManager: DownloadSource {
     private init() {
         self.fileDownloadSource = official
         self.versionManifestSource = AppSettings.shared.versionManifestSource == .mirror ? bmclapi : official
+    }
+
+    private func mirrorURL(for url: URL) -> URL? {
+        guard let host = url.host else { return nil }
+        let bmclapiBaseURL = URL(string: "https://bmclapi2.bangbang93.com")!
+        let mcimBaseURL = URL(string: "https://mod.mcimirror.top")!
+
+        if ["piston-meta.mojang.com", "piston-data.mojang.com", "launchermeta.mojang.com", "launcher.mojang.com"].contains(host) {
+            return bmclapiBaseURL.appending(path: url.path)
+        }
+
+        if host == "resources.download.minecraft.net" {
+            return bmclapiBaseURL.appending(path: "assets").appending(path: url.path)
+        }
+
+        if host == "libraries.minecraft.net" || host == "maven.fabricmc.net" ||
+            url.absoluteString.contains("files.minecraftforge.net/maven") ||
+            url.absoluteString.contains("maven.neoforged.net/releases") {
+            return bmclapiBaseURL.appending(path: "maven").appending(path: resolveMavenPath(url.path))
+        }
+
+        if host == "meta.fabricmc.net" {
+            return bmclapiBaseURL.appending(path: "fabric-meta").appending(path: url.path)
+        }
+
+        if host == "cdn.modrinth.com" || host == "edge.forgecdn.net" {
+            return mcimBaseURL.appending(path: url.path)
+        }
+
+        return nil
+    }
+
+    private func resolveMavenPath(_ path: String) -> String {
+        if path.hasPrefix("/maven/") {
+            return String(path.dropFirst("/maven/".count))
+        }
+        if path.hasPrefix("/releases/") {
+            return String(path.dropFirst("/releases/".count))
+        }
+        return path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
     }
 }

@@ -45,6 +45,7 @@ public class ResourceInstallTask: InstallTask {
         let base = instance.runningDirectory
         return switch version.projectType {
         case .mod: base.appending(path: "mods")
+        case .modpack: base
         case .resourcepack: base.appending(path: "resourcepacks")
         case .shader: base.appending(path: "shaderpacks")
         }
@@ -53,4 +54,3 @@ public class ResourceInstallTask: InstallTask {
     public override func getInstallStates() -> [InstallStage : InstallState] { [.resources : state] }
     public override func getTitle() -> String { "资源下载" }
 }
-

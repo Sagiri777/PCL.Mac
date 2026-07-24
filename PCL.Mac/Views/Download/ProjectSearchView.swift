@@ -111,6 +111,14 @@ struct ProjectListItem: View {
                                     hint("\(summary.name) 已存在！", .critical)
                                     return
                                 }
+                                if summary.type == .modpack {
+                                    if let version = try? await ModrinthProjectSearcher.shared.getVersion(summary.versions?.first ?? "") {
+                                        state.addToQueue(version)
+                                    } else {
+                                        hint("未找到 \(summary.name) 可用的版本！", .critical)
+                                    }
+                                    return
+                                }
                                 guard let instance = DataManager.shared.defaultInstance else {
                                     hint("请先选择一个实例！", .critical)
                                     return
@@ -243,6 +251,12 @@ class ProjectSearchViewState: ObservableObject {
                 return
             }
             dependencies.removeAll()
+
+            if version.projectType == .modpack {
+                pendingDownloadProjects.append(version)
+                hint("已将 \(version.name) 添加至整合包下载队列！", .finish)
+                return
+            }
             
             guard let instance = DataManager.shared.defaultInstance else {
                 hint("请先选择一个实例！", .critical)
@@ -372,6 +386,13 @@ struct ProjectQueueOverlay: View {
                         }
                         .fixedSize()
                         MyButton(text: "开始", foregroundStyle: AppSettings.shared.theme.getTextStyle()) {
+                            let modpacks = state.pendingDownloadProjects.filter { $0.projectType == .modpack }
+                            if !modpacks.isEmpty {
+                                Task {
+                                    await installModpacks(modpacks)
+                                }
+                                return
+                            }
                             guard let instance = DataManager.shared.defaultInstance else {
                                 hint("请先在版本列表中选择一个实例！", .critical)
                                 return
@@ -403,5 +424,33 @@ struct ProjectQueueOverlay: View {
             .animation(.easeInOut(duration: 0.2), value: isHovered)
             .animation(.easeInOut(duration: 0.2), value: state.pendingDownloadProjects)
         }
+    }
+
+    private func installModpacks(_ versions: [ProjectVersion]) async {
+        guard let directory = AppSettings.shared.currentMinecraftDirectory else {
+            hint("请先选择 Minecraft 文件夹！", .critical)
+            return
+        }
+
+        hint("开始导入 \(versions.count) 个整合包……")
+        for version in versions {
+            do {
+                let tempURL = SharedConstants.shared.temperatureURL.appending(path: "\(UUID().uuidString)-\(version.downloadURL.lastPathComponent)")
+                try await SingleFileDownloader.download(url: version.downloadURL, destination: tempURL, replaceMethod: .replace, networkCategory: .gameDownload)
+                _ = try await ModpackImporter.install(zipURL: tempURL, into: directory, instanceName: version.name)
+                try? FileManager.default.removeItem(at: tempURL)
+            } catch {
+                err("整合包 \(version.name) 导入失败：\(error.localizedDescription)")
+                hint("\(version.name) 导入失败（详见日志）", .critical)
+                return
+            }
+        }
+
+        await MainActor.run {
+            let installedIds = Set(versions.map(\.id))
+            state.pendingDownloadProjects.removeAll { installedIds.contains($0.id) }
+        }
+        directory.loadInnerInstances()
+        hint("整合包导入完成！", .finish)
     }
 }

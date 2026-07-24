@@ -10,21 +10,42 @@ import Foundation
 public struct DownloadItem {
     public let url: URL
     public let destination: URL
+    public let sha1: String?
     
-    fileprivate var fallbackURL: URL? {
-        fallbackURLProvider?()
+    fileprivate var fallbackURLs: [URL] {
+        fallbackURLProvider?() ?? []
     }
-    private var fallbackURLProvider: (() -> URL)?
+    private var fallbackURLProvider: (() -> [URL])?
     
     public init(_ downloadSource: DownloadSource, _ urlProvider: @escaping (DownloadSource) -> URL, destination: URL) {
         self.url = urlProvider(downloadSource)
-        self.fallbackURLProvider = { urlProvider(OfficialDownloadSource.shared) }
         self.destination = destination
+        self.sha1 = nil
+        self.fallbackURLProvider = {
+            DownloadSourceManager.shared.candidateURLs(for: urlProvider(downloadSource)).dropFirst().map { $0 }
+        }
     }
-    
-    public init(_ url: URL, _ destination: URL) {
+
+    public init(_ url: URL, _ destination: URL, sha1: String? = nil, fallbackURLs: [URL]? = nil) {
         self.url = url
         self.destination = destination
+        self.sha1 = sha1
+        self.fallbackURLProvider = {
+            fallbackURLs ?? DownloadSourceManager.shared.candidateURLs(for: url).dropFirst().map { $0 }
+        }
+    }
+
+    fileprivate var candidates: [URL] {
+        var urls = [url]
+        urls.append(contentsOf: fallbackURLs)
+        var seen = Set<URL>()
+        return urls.filter { seen.insert($0).inserted }
+    }
+
+    fileprivate func destinationIsValid() -> Bool {
+        guard FileManager.default.fileExists(atPath: destination.path) else { return false }
+        guard let sha1, !sha1.isEmpty else { return true }
+        return ((try? Util.sha1OfFile(url: destination)) ?? "").caseInsensitiveCompare(sha1) == .orderedSame
     }
 }
 
@@ -36,6 +57,7 @@ public class MultiFileDownloader {
     private let networkCategory: NetworkCategory
     private let progress: ((Double, Int) -> Void)?
     private let total: Int
+    private let maxRetryCount: Int = 3
     private var totalProgress: Double = 0
     private var finishedCount: Int = 0
     
@@ -43,7 +65,7 @@ public class MultiFileDownloader {
         task: InstallTask? = nil,
         urls: [URL],
         destinations: [URL],
-        concurrentLimit: Int = 16,
+        concurrentLimit: Int = DownloadSourceManager.shared.recommendedConcurrency,
         replaceMethod: ReplaceMethod = .skip,
         networkCategory: NetworkCategory = .gameDownload,
         progress: ((Double, Int) -> Void)? = nil
@@ -61,7 +83,7 @@ public class MultiFileDownloader {
     public init(
         task: InstallTask? = nil,
         items: [DownloadItem],
-        concurrentLimit: Int = 16,
+        concurrentLimit: Int = DownloadSourceManager.shared.recommendedConcurrency,
         replaceMethod: ReplaceMethod = .skip,
         networkCategory: NetworkCategory = .gameDownload,
         progress: ((Double, Int) -> Void)? = nil
@@ -135,28 +157,53 @@ public class MultiFileDownloader {
         if FileManager.default.fileExists(atPath: item.destination.path) && replaceMethod == .throw {
             throw MyLocalizedError(reason: "\(item.destination.lastPathComponent) 已存在。")
         }
+        if replaceMethod == .skip && item.destinationIsValid() {
+            finishedCount += 1
+            totalProgress += 1
+            await MainActor.run {
+                task?.completeOneFile()
+            }
+            return
+        }
         
+        var lastError: Error?
         var lastProgress: Double = 0
-        
-        do {
-            try await SingleFileDownloader.download(url: item.url, destination: item.destination, replaceMethod: replaceMethod, networkCategory: networkCategory) { progress in
-                self.totalProgress += (progress - lastProgress)
-                lastProgress = progress
-            }
-        } catch {
-            guard let fallback = item.fallbackURL else {
-                throw error
-            }
-            try await SingleFileDownloader.download(url: fallback, destination: item.destination, replaceMethod: .replace, networkCategory: networkCategory) { progress in
-                self.totalProgress += (progress - lastProgress)
-                lastProgress = progress
+        for candidate in item.candidates {
+            for retryIndex in 0...maxRetryCount {
+                do {
+                    try await SingleFileDownloader.download(url: candidate, destination: item.destination, replaceMethod: .replace, networkCategory: networkCategory) { progress in
+                        let normalizedProgress = progress < 0 ? lastProgress : progress
+                        self.totalProgress += (normalizedProgress - lastProgress)
+                        lastProgress = normalizedProgress
+                    }
+                    if let sha1 = item.sha1, !sha1.isEmpty {
+                        let actual = try Util.sha1OfFile(url: item.destination)
+                        guard actual.caseInsensitiveCompare(sha1) == .orderedSame else {
+                            try? FileManager.default.removeItem(at: item.destination)
+                            throw MyLocalizedError(reason: "\(item.destination.lastPathComponent) 校验失败。")
+                        }
+                    }
+                    finishedCount += 1
+                    await MainActor.run {
+                        task?.completeOneFile()
+                    }
+                    return
+                } catch {
+                    lastError = error
+                    try? FileManager.default.removeItem(at: item.destination)
+                    totalProgress -= lastProgress
+                    lastProgress = 0
+                    if retryIndex < maxRetryCount {
+                        warn("下载 \(candidate.lastPathComponent) 失败：\(error.localizedDescription)，重试 \(retryIndex + 1)/\(maxRetryCount)")
+                        try await Task.sleep(for: .seconds(Double(retryIndex + 1) * 0.5))
+                    } else {
+                        warn("下载 \(candidate.lastPathComponent) 失败：\(error.localizedDescription)")
+                    }
+                }
             }
         }
-        
-        finishedCount += 1
-        await MainActor.run {
-            task?.completeOneFile()
-        }
+
+        throw lastError ?? MyLocalizedError(reason: "\(item.destination.lastPathComponent) 下载失败。")
     }
 }
 

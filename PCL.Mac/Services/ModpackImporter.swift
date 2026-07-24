@@ -56,15 +56,17 @@ public typealias ModpackImportProgressHandler = (ModpackImportProgressUpdate) ->
 // MARK: - ModpackImporter
 
 public enum ModpackImporter {
-    public enum Format: Sendable {
+    public enum Format: Sendable, Equatable {
         case modrinth       // .mrpack (zip 含 modrinth.index.json)
         case curseforge     // .zip 含 manifest.json (minecraft/modloader 字段)
         case hmcl           // .zip 含 manifest.json + override/
+        case simple         // 压缩包内直接包含 .minecraft/versions/<实例名>
         case unknown
     }
 
     /// 探测 zip 类型。
     public static func detectFormat(of zipURL: URL) throws -> Format {
+        let zipURL = try resolveNestedModpackURL(zipURL)
         let archive = try Archive(url: zipURL, accessMode: .read)
         let entries = Array(archive)
         if entries.contains(where: { $0.path == "modrinth.index.json" }) {
@@ -77,11 +79,15 @@ public enum ModpackImporter {
             }
             return .curseforge
         }
+        if findSimpleInstancePrefix(in: entries) != nil {
+            return .simple
+        }
         return .unknown
     }
 
     /// 解析 .mrpack。
     public static func parseModrinth(_ zipURL: URL) throws -> ModrinthModpack {
+        let zipURL = try resolveNestedModpackURL(zipURL)
         let archive = try Archive(url: zipURL, accessMode: .read)
         guard let entry = Array(archive).first(where: { $0.path == "modrinth.index.json" }) else {
             throw MyLocalizedError(reason: "找不到 modrinth.index.json")
@@ -93,6 +99,7 @@ public enum ModpackImporter {
 
     /// 解析 CurseForge manifest.json。
     public static func parseCurseForge(_ zipURL: URL) throws -> JSON {
+        let zipURL = try resolveNestedModpackURL(zipURL)
         let archive = try Archive(url: zipURL, accessMode: .read)
         guard let entry = Array(archive).first(where: { $0.path == "manifest.json" }) else {
             throw MyLocalizedError(reason: "找不到 manifest.json")
@@ -122,6 +129,7 @@ public enum ModpackImporter {
             finishedFiles: 0,
             totalFiles: 0
         ))
+        let zipURL = try resolveNestedModpackURL(zipURL)
         let format = try detectFormat(of: zipURL)
         switch format {
         case .modrinth:
@@ -130,8 +138,10 @@ public enum ModpackImporter {
             return try await installCurseForge(zipURL: zipURL, into: minecraftDirectory, instanceName: instanceName, progress: progress)
         case .hmcl:
             return try await installHMCL(zipURL: zipURL, into: minecraftDirectory, instanceName: instanceName, progress: progress)
+        case .simple:
+            return try await installSimple(zipURL: zipURL, into: minecraftDirectory, instanceName: instanceName, progress: progress)
         case .unknown:
-            throw MyLocalizedError(reason: "无法识别的整合包格式。期待 .mrpack / CurseForge / HMCL 其中之一。")
+            throw MyLocalizedError(reason: "无法识别的整合包格式。期待 .mrpack / CurseForge / HMCL / .minecraft 压缩包其中之一。")
         }
     }
 
@@ -145,7 +155,8 @@ public enum ModpackImporter {
     ) async throws -> URL {
         let pack = try parseModrinth(zipURL)
         let name = instanceName ?? pack.name
-        let versionDir = minecraftDirectory.versionsURL.appending(path: sanitizeDirName(name))
+        let instanceId = uniqueInstanceDirectoryName(sanitizeDirName(name), in: minecraftDirectory)
+        let versionDir = minecraftDirectory.versionsURL.appending(path: instanceId)
         // 实例内容直接放到 versionDir（即实例 runningDirectory），与 ModInstaller / InstanceModsView 读取的 runningDirectory/mods 一致；
         // 之前多套一层 ".minecraft"，导致 jar 落到 versions/<name>/.minecraft/mods，启动器和 mod 列表都看不到。
         let instanceDir = versionDir
@@ -153,56 +164,36 @@ public enum ModpackImporter {
         try FileManager.default.createDirectory(at: instanceDir.appending(path: "mods"), withIntermediateDirectories: true)
 
         // 1. 下载所有 file 到 instanceDir/<path>
-        log("Modrinth 整合包安装：\(name)，共 \(pack.files.count) 个文件")
-        progress?(.init(packName: name, status: "正在解决依赖", progress: 0.04, finishedFiles: 0, totalFiles: pack.files.count))
+        let files = pack.files.filter { $0.env?.client != "unsupported" }
+        log("Modrinth 整合包安装：\(name)，共 \(files.count) 个文件")
+        progress?(.init(packName: name, status: "正在解决依赖", progress: 0.04, finishedFiles: 0, totalFiles: files.count))
         let downloadBaseProgress = 0.08
         let downloadProgressWeight = 0.84
-        for (index, file) in pack.files.enumerated() {
-            let target = instanceDir.appending(path: file.path)
-            try target.ensureParentDirectoryExists()
+
+        let downloadItems: [DownloadItem] = files.compactMap { file in
             guard let url = file.downloads.first else {
                 log("跳过无下载源的文件：\(file.path)")
-                progress?(.init(
-                    packName: name,
-                    status: "正在导入 \(file.path)",
-                    progress: progressForFile(index + 1, 1, total: pack.files.count, base: downloadBaseProgress, weight: downloadProgressWeight),
-                    finishedFiles: index + 1,
-                    totalFiles: pack.files.count
-                ))
-                continue
+                return nil
             }
-            log("下载 \(file.path) (\(file.fileSize) bytes)")
+            return DownloadItem(url, instanceDir.appending(path: file.path), sha1: file.hashes.sha1)
+        }
+        let downloader = MultiFileDownloader(items: downloadItems, replaceMethod: .skip, networkCategory: .gameDownload) { fileProgress, finished in
+            let progressValue = downloadBaseProgress + fileProgress * downloadProgressWeight
             progress?(.init(
                 packName: name,
-                status: "正在导入 \(file.path)",
-                progress: progressForFile(index, 0, total: pack.files.count, base: downloadBaseProgress, weight: downloadProgressWeight),
-                finishedFiles: index,
-                totalFiles: pack.files.count
+                status: "正在导入整合包文件",
+                progress: progressValue,
+                finishedFiles: finished,
+                totalFiles: files.count
             ))
-            try await SingleFileDownloader.download(url: url, destination: target, networkCategory: .gameDownload) { fileProgress in
-                let normalizedProgress = fileProgress < 0 ? 0 : fileProgress
-                progress?(.init(
-                    packName: name,
-                    status: "正在导入 \(file.path)",
-                    progress: progressForFile(index, normalizedProgress, total: pack.files.count, base: downloadBaseProgress, weight: downloadProgressWeight),
-                    finishedFiles: index,
-                    totalFiles: pack.files.count
-                ))
-            }
-            // 校验 SHA1
-            if !file.hashes.sha1.isEmpty {
-                do {
-                    try FileHash.verify(target, expected: file.hashes.sha1, algorithm: .sha1)
-                } catch {
-                    err("SHA1 校验失败：\(file.path) — \(error.localizedDescription)")
-                }
-            }
         }
+        try await downloader.start()
 
         // 2. 写出 overrides 目录（Modrinth 标准放在 overrides/ 子目录，必须传 sourceSubdir，
         //    否则 extractOverrides 的无 sub 分支会跳过所有含 "/" 的条目，config/资源包/光影一个都不解压）
-        progress?(.init(packName: name, status: "正在解压覆盖文件", progress: 0.93, finishedFiles: pack.files.count, totalFiles: pack.files.count))
+        progress?(.init(packName: name, status: "正在解压覆盖文件", progress: 0.93, finishedFiles: files.count, totalFiles: files.count))
         try await extractOverrides(zipURL: zipURL, into: instanceDir, sourceSubdir: "overrides")
+        try await extractOverrides(zipURL: zipURL, into: instanceDir, sourceSubdir: "client-overrides")
 
         // 3. 构造版本 JSON
         progress?(.init(packName: name, status: "正在解决依赖", progress: 0.97, finishedFiles: pack.files.count, totalFiles: pack.files.count))
@@ -214,7 +205,7 @@ public enum ModpackImporter {
 
         let versionJSON = try buildInheritsVersionJSON(
             inheritsFrom: mcVersion,
-            versionId: sanitizeDirName(name),
+            versionId: instanceId,
             loaders: [
                 fabricLoader.map { "fabric-loader:\($0)" },
                 forgeLoader.map { "forge:\($0)" },
@@ -222,10 +213,10 @@ public enum ModpackImporter {
                 quiltLoader.map { "quilt-loader:\($0)" }
             ].compactMap { $0 }
         )
-        try versionJSON.write(to: versionDir.appending(path: "\(sanitizeDirName(name)).json"))
+        try versionJSON.write(to: versionDir.appending(path: "\(instanceId).json"))
 
         log("Modrinth 整合包安装完成：\(name)")
-        progress?(.init(packName: name, status: "导入完成", progress: 1, finishedFiles: pack.files.count, totalFiles: pack.files.count))
+        progress?(.init(packName: name, status: "导入完成", progress: 1, finishedFiles: files.count, totalFiles: files.count))
         return instanceDir
     }
 
@@ -240,7 +231,8 @@ public enum ModpackImporter {
         let manifest = try parseCurseForge(zipURL)
         let mcVersion = manifest["minecraft"]["version"].stringValue
         let name = instanceName ?? manifest["name"].stringValue
-        let versionDir = minecraftDirectory.versionsURL.appending(path: sanitizeDirName(name))
+        let instanceId = uniqueInstanceDirectoryName(sanitizeDirName(name), in: minecraftDirectory)
+        let versionDir = minecraftDirectory.versionsURL.appending(path: instanceId)
         let instanceDir = versionDir
 
         try FileManager.default.createDirectory(at: instanceDir.appending(path: "mods"), withIntermediateDirectories: true)
@@ -277,10 +269,10 @@ public enum ModpackImporter {
 
         let versionJSON = try buildInheritsVersionJSON(
             inheritsFrom: mcVersion,
-            versionId: sanitizeDirName(name),
+            versionId: instanceId,
             loaders: loaders
         )
-        try versionJSON.write(to: versionDir.appending(path: "\(sanitizeDirName(name)).json"))
+        try versionJSON.write(to: versionDir.appending(path: "\(instanceId).json"))
         log("CurseForge 整合包安装完成（部分）：\(name)")
         progress?(.init(packName: name, status: "导入完成", progress: 1, finishedFiles: mods.count, totalFiles: mods.count))
         return instanceDir
@@ -297,7 +289,8 @@ public enum ModpackImporter {
         let manifest = try parseHMCL(zipURL)
         let mcVersion = manifest["minecraft"]["version"].stringValue
         let name = instanceName ?? manifest["name"].stringValue
-        let versionDir = minecraftDirectory.versionsURL.appending(path: sanitizeDirName(name))
+        let instanceId = uniqueInstanceDirectoryName(sanitizeDirName(name), in: minecraftDirectory)
+        let versionDir = minecraftDirectory.versionsURL.appending(path: instanceId)
         let instanceDir = versionDir
 
         try FileManager.default.createDirectory(at: instanceDir, withIntermediateDirectories: true)
@@ -318,13 +311,59 @@ public enum ModpackImporter {
 
         let versionJSON = try buildInheritsVersionJSON(
             inheritsFrom: mcVersion,
-            versionId: sanitizeDirName(name),
+            versionId: instanceId,
             loaders: loaders
         )
-        try versionJSON.write(to: versionDir.appending(path: "\(sanitizeDirName(name)).json"))
+        try versionJSON.write(to: versionDir.appending(path: "\(instanceId).json"))
         log("HMCL 整合包安装完成：\(name)")
         progress?(.init(packName: name, status: "导入完成", progress: 1, finishedFiles: 0, totalFiles: 0))
         return instanceDir
+    }
+
+    // MARK: - 简单压缩包安装
+
+    public static func installSimple(
+        zipURL: URL,
+        into minecraftDirectory: MinecraftDirectory,
+        instanceName: String? = nil,
+        progress: ModpackImportProgressHandler? = nil
+    ) async throws -> URL {
+        let archive = try Archive(url: zipURL, accessMode: .read)
+        let entries = Array(archive)
+        guard let found = findSimpleInstancePrefix(in: entries) else {
+            throw MyLocalizedError(reason: "找不到 .minecraft/versions 下的实例目录。")
+        }
+
+        let name = instanceName ?? found.name
+        let instanceId = uniqueInstanceDirectoryName(sanitizeDirName(name), in: minecraftDirectory)
+        let versionDir = minecraftDirectory.versionsURL.appending(path: instanceId)
+        try FileManager.default.createDirectory(at: versionDir, withIntermediateDirectories: true)
+
+        let files = entries.filter { !$0.path.hasSuffix("/") && normalizedArchivePath($0.path).hasPrefix(found.prefix) }
+        progress?(.init(packName: name, status: "正在拷贝整合包文件", progress: 0.1, finishedFiles: 0, totalFiles: files.count))
+
+        for (index, entry) in files.enumerated() {
+            let normalized = normalizedArchivePath(entry.path)
+            let relative = String(normalized.dropFirst(found.prefix.count)).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            guard !relative.isEmpty else { continue }
+            let target = versionDir.appending(path: relative)
+            try target.ensureParentDirectoryExists()
+            if FileManager.default.fileExists(atPath: target.path) {
+                try FileManager.default.removeItem(at: target)
+            }
+            _ = try archive.extract(entry, to: target)
+            progress?(.init(
+                packName: name,
+                status: "正在拷贝 \(relative)",
+                progress: progressForFile(index, 1, total: files.count, base: 0.1, weight: 0.85),
+                finishedFiles: index + 1,
+                totalFiles: files.count
+            ))
+        }
+
+        try renameSimpleVersionFilesIfNeeded(in: versionDir, from: found.name, to: instanceId)
+        progress?(.init(packName: name, status: "导入完成", progress: 1, finishedFiles: files.count, totalFiles: files.count))
+        return versionDir
     }
 
     // MARK: - Helpers
@@ -423,5 +462,64 @@ public enum ModpackImporter {
         }
         let cleaned = out.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
         return cleaned.isEmpty ? "modpack" : cleaned
+    }
+
+    private static func uniqueInstanceDirectoryName(_ proposed: String, in minecraftDirectory: MinecraftDirectory) -> String {
+        let base = proposed.isEmpty ? "modpack" : proposed
+        var candidate = base
+        var index = 2
+        while FileManager.default.fileExists(atPath: minecraftDirectory.versionsURL.appending(path: candidate).path) {
+            candidate = "\(base) \(index)"
+            index += 1
+        }
+        return candidate
+    }
+
+    private static func resolveNestedModpackURL(_ zipURL: URL) throws -> URL {
+        let archive = try Archive(url: zipURL, accessMode: .read)
+        guard let entry = Array(archive).first(where: {
+            let path = normalizedArchivePath($0.path).lowercased()
+            return path == "modpack.mrpack" || path == "modpack.zip"
+        }) else {
+            return zipURL
+        }
+
+        let tempDirectory = SharedConstants.shared.temperatureURL.appending(path: "modpack-import-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
+        let nestedURL = tempDirectory.appending(path: (entry.path as NSString).lastPathComponent)
+        _ = try archive.extract(entry, to: nestedURL)
+        return nestedURL
+    }
+
+    private static func findSimpleInstancePrefix(in entries: [Entry]) -> (prefix: String, name: String)? {
+        for entry in entries {
+            let path = normalizedArchivePath(entry.path)
+            guard let range = path.range(of: ".minecraft/versions/") else { continue }
+            let remaining = path[range.upperBound...]
+            guard let namePart = remaining.split(separator: "/", omittingEmptySubsequences: true).first else { continue }
+            let prefix = String(path[..<range.upperBound]) + namePart + "/"
+            return (prefix, String(namePart))
+        }
+        return nil
+    }
+
+    private static func normalizedArchivePath(_ path: String) -> String {
+        let replaced = path.replacingOccurrences(of: "\\", with: "/")
+        return replaced.hasPrefix("./") ? String(replaced.dropFirst(2)) : replaced
+    }
+
+    private static func renameSimpleVersionFilesIfNeeded(in versionDir: URL, from oldName: String, to newName: String) throws {
+        guard oldName != newName else { return }
+        let oldJSON = versionDir.appending(path: "\(oldName).json")
+        let newJSON = versionDir.appending(path: "\(newName).json")
+        if FileManager.default.fileExists(atPath: oldJSON.path), !FileManager.default.fileExists(atPath: newJSON.path) {
+            try FileManager.default.moveItem(at: oldJSON, to: newJSON)
+        }
+
+        let oldJar = versionDir.appending(path: "\(oldName).jar")
+        let newJar = versionDir.appending(path: "\(newName).jar")
+        if FileManager.default.fileExists(atPath: oldJar.path), !FileManager.default.fileExists(atPath: newJar.path) {
+            try FileManager.default.moveItem(at: oldJar, to: newJar)
+        }
     }
 }

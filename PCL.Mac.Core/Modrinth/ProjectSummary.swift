@@ -134,7 +134,7 @@ public class ProjectSummary: Hashable, Identifiable, Equatable {
             gameVersions: (json["game_versions"].array ?? json["versions"].arrayValue).map { MinecraftVersion(displayName: $0.stringValue) },
             categories: json["categories"].arrayValue.union(json["loaders"].arrayValue).map { $0.stringValue },
             iconURL: json["icon_url"].url,
-            infoURL: URL(string: "https://modrinth.com/mod/\(json["slug"].stringValue)")!,
+            infoURL: URL(string: "https://modrinth.com/\((ProjectType(rawValue: json["project_type"].stringValue) ?? .mod).modrinthPath)/\(json["slug"].stringValue)")!,
             versions: json["versions"].array.map { $0.map { $0.stringValue } } // 若 versions 存在，传入 versions 的 [String] 形式，否则传入 nil
         )
     }

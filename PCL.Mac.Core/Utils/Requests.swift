@@ -147,14 +147,14 @@ public final class Requests: @unchecked Sendable {
         }
     }
 
-    /// 构造带代理配置的 URLSession。如果代理未启用，返回默认 session。
-    public static func makeSession(forceUseProxy: Bool = false) -> URLSession {
+    /// 构造带代理配置的 URLSessionConfiguration。
+    public static func makeConfiguration(forceUseProxy: Bool = false) -> URLSessionConfiguration {
         let settings = AppSettings.shared
         guard forceUseProxy,
               settings.proxyEnabled,
               !settings.proxyHost.isEmpty,
               settings.proxyPort > 0 else {
-            return URLSession.shared
+            return URLSessionConfiguration.default
         }
         let config = URLSessionConfiguration.default
         config.connectionProxyDictionary = [
@@ -166,7 +166,13 @@ public final class Requests: @unchecked Sendable {
             kCFNetworkProxiesHTTPSProxy: settings.proxyHost,
             kCFNetworkProxiesHTTPSPort: settings.proxyPort
         ]
-        return URLSession(configuration: config)
+        return config
+    }
+
+    /// 构造带代理配置的 URLSession。如果代理未启用，返回默认 session。
+    public static func makeSession(forceUseProxy: Bool = false) -> URLSession {
+        guard forceUseProxy else { return URLSession.shared }
+        return URLSession(configuration: makeConfiguration(forceUseProxy: true))
     }
 
     public static func post(
