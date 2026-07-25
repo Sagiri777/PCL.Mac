@@ -37,7 +37,7 @@
 ```shell
 git clone https://github.com/Sagiri777/PCL.Mac.git
 cd PCL.Mac
-xcodebuild -project PCL.Mac.xcodeproj -scheme PCL.Mac -configuration Debug -destination 'platform=macOS' build
+xcodebuild -project PCL.Mac.xcodeproj -scheme PCL-Mac -configuration Debug -destination 'platform=macOS' build
 ```
 
 如需通过本地代理访问 GitHub / Swift Package 依赖：

@@ -45,7 +45,7 @@ jobs:
       - name: Build Universal Binary (xcodebuild)
         run: |
           PROJECT="PCL.Mac.xcodeproj"
-          SCHEME="PCL.Mac"
+          SCHEME="PCL-Mac"
 
           if [ -d "$PROJECT" ]; then
             xcodebuild -project "$PROJECT" -scheme "$SCHEME" -configuration Release -archivePath build \
