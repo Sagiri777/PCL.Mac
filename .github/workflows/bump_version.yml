@@ -1,0 +1,179 @@
+name: bump_version
+
+on:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    if: startsWith(github.event.head_commit.message, 'bump_version')
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - name: Checkout code and tags
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Parse target version
+        id: version
+        env:
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          FIRST_LINE="${COMMIT_MESSAGE%%$'\n'*}"
+          VERSION_SPEC="${FIRST_LINE#bump_version}"
+          VERSION_SPEC="$(printf '%s' "$VERSION_SPEC" | sed -E 's/^[[:space:]:]+//; s/[[:space:]]+$//')"
+
+          if [[ ! "$VERSION_SPEC" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid bump_version message: $FIRST_LINE" >&2
+            echo "Expected: bump_version 1.2.3 or bump_version v1.2.3" >&2
+            exit 1
+          fi
+
+          TARGET_VERSION="${VERSION_SPEC#v}"
+          APP_VERSION="${TARGET_VERSION%%-*}"
+          TAG="v$TARGET_VERSION"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag already exists: $TAG" >&2
+            exit 1
+          fi
+
+          if [[ "$TARGET_VERSION" == *-* ]]; then
+            PRERELEASE=true
+          else
+            PRERELEASE=false
+          fi
+
+          echo "version=$APP_VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+          echo "Preparing release $TAG"
+
+      - name: Generate categorized release notes
+        env:
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: scripts/generate_release_notes.sh release-notes.md HEAD
+
+      - name: Upload release metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-metadata
+          path: release-notes.md
+
+  build:
+    needs: prepare
+    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        architecture: [arm64, x86_64]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest
+
+      - name: Install dependencies (if using CocoaPods)
+        run: |
+          if [ -f "Podfile" ]; then
+            sudo gem install cocoapods
+            pod install
+          fi
+
+      - name: Generate Secrets.xcconfig
+        run: |
+          echo "IS_DEVELOPMENT = false" >> Secrets.xcconfig
+          echo "BRANCH = $BRANCH" >> Secrets.xcconfig
+        env:
+          BRANCH: ${{ github.ref_name }}
+
+      - name: Replace secrets
+        run: |
+          sed -i '' "s/{{ARTIFACT_PAT}}/$ARTIFACT_PAT/g" PCL.Mac/Secrets.swift
+          sed -i '' "s/{{CLIENT_ID}}/$CLIENT_ID/g" PCL.Mac/Secrets.swift
+          sed -i '' "s/{{THEME_KEY}}/$THEME_KEY/g" PCL.Mac/Secrets.swift
+        env:
+          ARTIFACT_PAT: ${{ secrets.ARTIFACT_PAT }}
+          CLIENT_ID: ${{ secrets.CLIENT_ID }}
+          THEME_KEY: ${{ secrets.THEME_KEY }}
+
+      - name: Build ${{ matrix.architecture }} release
+        env:
+          ARCHITECTURE: ${{ matrix.architecture }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          xcodebuild -project PCL.Mac.xcodeproj -scheme PCL-Mac -configuration Release \
+            -archivePath "build/PCL.Mac-$ARCHITECTURE" \
+            -xcconfig Secrets.xcconfig \
+            ARCHS="$ARCHITECTURE" ONLY_ACTIVE_ARCH=YES \
+            MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
+            CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO archive
+
+          APP_PATH="build/PCL.Mac-$ARCHITECTURE.xcarchive/Products/Applications/PCL.Mac.app"
+          BINARY="$APP_PATH/Contents/MacOS/PCL.Mac"
+          if [ ! -d "$APP_PATH" ]; then
+            echo "PCL.Mac.app not found: $APP_PATH" >&2
+            exit 1
+          fi
+          file "$BINARY"
+          test "$(lipo -archs "$BINARY")" = "$ARCHITECTURE"
+
+          mkdir -p build/Release
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" \
+            "build/Release/PCL.Mac-$TAG-$ARCHITECTURE.zip"
+
+      - name: Upload ${{ matrix.architecture }} package
+        uses: actions/upload-artifact@v4
+        with:
+          name: PCL.Mac-${{ needs.prepare.outputs.tag }}-${{ matrix.architecture }}
+          path: build/Release/PCL.Mac-${{ needs.prepare.outputs.tag }}-${{ matrix.architecture }}.zip
+
+  release:
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download architecture packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: PCL.Mac-${{ needs.prepare.outputs.tag }}-*
+          path: release
+          merge-multiple: true
+
+      - name: Download release notes
+        uses: actions/download-artifact@v4
+        with:
+          name: release-metadata
+          path: release-metadata
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+        run: |
+          RELEASE_FLAGS=()
+          if [[ "$PRERELEASE" == "true" ]]; then
+            RELEASE_FLAGS+=(--prerelease)
+          else
+            RELEASE_FLAGS+=(--latest)
+          fi
+
+          gh release create "$TAG" release/*.zip \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "PCL.Mac Glass Edition $TAG" \
+            --notes-file release-metadata/release-notes.md \
+            "${RELEASE_FLAGS[@]}"
