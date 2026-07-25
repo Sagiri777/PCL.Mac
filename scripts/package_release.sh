@@ -9,6 +9,7 @@ DERIVED_DATA_PATH="${DERIVED_DATA_PATH:-$ROOT_DIR/build/DerivedData}"
 DIST_DIR="${DIST_DIR:-$ROOT_DIR/dist}"
 ARCHIVE_BASENAME="${ARCHIVE_BASENAME:-PCL.Mac}"
 APP_NAME="${APP_NAME:-PCL.Mac.app}"
+ARCHITECTURES="${ARCHITECTURES:-arm64 x86_64}"
 
 mkdir -p "$DIST_DIR"
 mkdir -p "$ROOT_DIR/build"
@@ -44,39 +45,50 @@ xcodebuild \
   -resolvePackageDependencies \
   ${BUILD_SETTINGS[@]+"${BUILD_SETTINGS[@]}"}
 
-xcodebuild \
-  -project "$PROJECT_PATH" \
-  -scheme "$SCHEME" \
-  -configuration "$CONFIGURATION" \
-  -destination "platform=macOS" \
-  -derivedDataPath "$DERIVED_DATA_PATH" \
-  clean build \
-  CODE_SIGN_STYLE=Manual \
-  CODE_SIGN_IDENTITY="-" \
-  DEVELOPMENT_TEAM="" \
-  ${BUILD_SETTINGS[@]+"${BUILD_SETTINGS[@]}"}
+for ARCHITECTURE in $ARCHITECTURES; do
+  ARCH_DERIVED_DATA_PATH="$DERIVED_DATA_PATH-$ARCHITECTURE"
 
-APP_PATH="$DERIVED_DATA_PATH/Build/Products/$CONFIGURATION/$APP_NAME"
-if [[ ! -d "$APP_PATH" ]]; then
-  echo "error: built app not found: $APP_PATH" >&2
-  exit 1
-fi
+  echo "==> Building architecture: $ARCHITECTURE"
+  xcodebuild \
+    -project "$PROJECT_PATH" \
+    -scheme "$SCHEME" \
+    -configuration "$CONFIGURATION" \
+    -destination "generic/platform=macOS" \
+    -derivedDataPath "$ARCH_DERIVED_DATA_PATH" \
+    clean build \
+    ARCHS="$ARCHITECTURE" \
+    ONLY_ACTIVE_ARCH=YES \
+    CODE_SIGN_STYLE=Manual \
+    CODE_SIGN_IDENTITY="-" \
+    DEVELOPMENT_TEAM="" \
+    ${BUILD_SETTINGS[@]+"${BUILD_SETTINGS[@]}"}
 
-codesign --force --deep --sign - "$APP_PATH"
+  APP_PATH="$ARCH_DERIVED_DATA_PATH/Build/Products/$CONFIGURATION/$APP_NAME"
+  if [[ ! -d "$APP_PATH" ]]; then
+    echo "error: built app not found: $APP_PATH" >&2
+    exit 1
+  fi
 
-VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PATH/Contents/Info.plist" 2>/dev/null || echo "1.0")"
-BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_PATH/Contents/Info.plist" 2>/dev/null || echo "1")"
-STAMP="$(date +%Y%m%d-%H%M%S)"
-PACKAGE_DIR="$DIST_DIR/$ARCHIVE_BASENAME-$VERSION-$BUILD-$STAMP"
-ZIP_PATH="$PACKAGE_DIR.zip"
+  BINARY_PATH="$APP_PATH/Contents/MacOS/${APP_NAME%.app}"
+  if [[ "$(lipo -archs "$BINARY_PATH")" != "$ARCHITECTURE" ]]; then
+    echo "error: unexpected architectures in $BINARY_PATH: $(lipo -archs "$BINARY_PATH")" >&2
+    exit 1
+  fi
 
-rm -rf "$PACKAGE_DIR" "$ZIP_PATH"
-mkdir -p "$PACKAGE_DIR"
-ditto "$APP_PATH" "$PACKAGE_DIR/$APP_NAME"
+  codesign --force --deep --sign - "$APP_PATH"
 
-(
-  cd "$DIST_DIR"
-  /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$(basename "$PACKAGE_DIR")" "$(basename "$ZIP_PATH")"
-)
+  VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PATH/Contents/Info.plist" 2>/dev/null || echo "1.0")"
+  PACKAGE_DIR="$DIST_DIR/$ARCHIVE_BASENAME-$VERSION-$ARCHITECTURE"
+  ZIP_PATH="$PACKAGE_DIR.zip"
 
-echo "==> Release package: $ZIP_PATH"
+  rm -rf "$PACKAGE_DIR" "$ZIP_PATH"
+  mkdir -p "$PACKAGE_DIR"
+  ditto "$APP_PATH" "$PACKAGE_DIR/$APP_NAME"
+
+  (
+    cd "$DIST_DIR"
+    /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$(basename "$PACKAGE_DIR")" "$(basename "$ZIP_PATH")"
+  )
+
+  echo "==> Release package ($ARCHITECTURE): $ZIP_PATH"
+done

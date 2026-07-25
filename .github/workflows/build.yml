@@ -3,11 +3,19 @@ name: Build macOS App
 on:
   push:
     branches: [ main ]
+    tags: [ "v*" ]
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build:
     runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        architecture: [arm64, x86_64]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -42,43 +50,75 @@ jobs:
           CLIENT_ID: ${{ secrets.CLIENT_ID }}
           THEME_KEY: ${{ secrets.THEME_KEY }}
 
-      - name: Build Universal Binary (xcodebuild)
+      - name: Build ${{ matrix.architecture }} Binary (xcodebuild)
         run: |
           PROJECT="PCL.Mac.xcodeproj"
           SCHEME="PCL-Mac"
+          ARCHITECTURE="${{ matrix.architecture }}"
 
           if [ -d "$PROJECT" ]; then
-            xcodebuild -project "$PROJECT" -scheme "$SCHEME" -configuration Release -archivePath build \
+            xcodebuild -project "$PROJECT" -scheme "$SCHEME" -configuration Release \
+              -archivePath "build/PCL.Mac-$ARCHITECTURE" \
               -xcconfig Secrets.xcconfig \
-              ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO \
+              ARCHS="$ARCHITECTURE" ONLY_ACTIVE_ARCH=YES \
               CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO archive
           else
             echo "PCL.Mac.xcodeproj not found!"
             exit 1
           fi
 
-      - name: Copy .app to build/Release
+      - name: Copy ${{ matrix.architecture }} .app
         run: |
-          mkdir -p build/Release
-          APP_PATH="build.xcarchive/Products/Applications/PCL.Mac.app"
+          ARCHITECTURE="${{ matrix.architecture }}"
+          OUTPUT_DIR="build/Release/$ARCHITECTURE"
+          APP_PATH="build/PCL.Mac-$ARCHITECTURE.xcarchive/Products/Applications/PCL.Mac.app"
+          mkdir -p "$OUTPUT_DIR"
           if [ -d "$APP_PATH" ]; then
-            cp -R "$APP_PATH" build/Release/
+            cp -R "$APP_PATH" "$OUTPUT_DIR/"
           else
             echo "PCL.Mac.app not found!"
             exit 1
           fi
 
-      - name: Verify Universal Binary
+      - name: Verify ${{ matrix.architecture }} Binary
         run: |
-          file build/Release/PCL.Mac.app/Contents/MacOS/PCL.Mac
+          ARCHITECTURE="${{ matrix.architecture }}"
+          BINARY="build/Release/$ARCHITECTURE/PCL.Mac.app/Contents/MacOS/PCL.Mac"
+          file "$BINARY"
+          test "$(lipo -archs "$BINARY")" = "$ARCHITECTURE"
 
-      - name: Zip PCL.Mac.app
+      - name: Zip ${{ matrix.architecture }} PCL.Mac.app
         run: |
-          cd build/Release
-          zip -r PCL.Mac.zip PCL.Mac.app
+          ARCHITECTURE="${{ matrix.architecture }}"
+          cd "build/Release/$ARCHITECTURE"
+          ditto -c -k --sequesterRsrc --keepParent PCL.Mac.app "../PCL.Mac-$ARCHITECTURE.zip"
 
       - name: Archive build products
         uses: actions/upload-artifact@v4
         with:
-          name: PCL.Mac
-          path: build/Release/PCL.Mac.zip
+          name: PCL.Mac-${{ matrix.architecture }}
+          path: build/Release/PCL.Mac-${{ matrix.architecture }}.zip
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download architecture packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: PCL.Mac-*
+          path: release
+          merge-multiple: true
+
+      - name: Publish architecture packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mv release/PCL.Mac-arm64.zip "release/PCL.Mac-${GITHUB_REF_NAME}-arm64.zip"
+          mv release/PCL.Mac-x86_64.zip "release/PCL.Mac-${GITHUB_REF_NAME}-x86_64.zip"
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || \
+            gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes
+          gh release upload "$GITHUB_REF_NAME" release/*.zip --clobber

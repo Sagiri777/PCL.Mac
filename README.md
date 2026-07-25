@@ -10,7 +10,7 @@
 
 - Release: `v1.0.0`
 - 系统要求: macOS 14.0+
-- 构建产物: ad-hoc 签名的 `.app` 压缩包
+- 构建产物: 分别面向 Apple Silicon（arm64）与 Intel Mac（x86_64）的 ad-hoc 签名 `.app` 压缩包
 
 ## 项目特点
 
@@ -54,6 +54,8 @@ Microsoft 正版登录需要 OAuth `CLIENT_ID`。源码不会携带个人凭证�
 ```shell
 scripts/package_release.sh
 ```
+
+脚本会分别生成 `PCL.Mac-<版本>-arm64.zip` 与 `PCL.Mac-<版本>-x86_64.zip`，用户可根据 Mac 处理器架构选择对应安装包。
 
 可选注入公开 OAuth client id：
 
