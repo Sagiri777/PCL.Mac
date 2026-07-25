@@ -43,12 +43,62 @@ public struct ModrinthModpack: Codable, Sendable {
     }
 }
 
+public enum ModpackImportStage: Int, CaseIterable, Identifiable, Sendable {
+    case detecting
+    case runtime
+    case files
+    case overrides
+    case validation
+
+    public var id: Int { rawValue }
+
+    public var title: String {
+        switch self {
+        case .detecting: "识别整合包"
+        case .runtime: "安装游戏环境"
+        case .files: "下载整合包内容"
+        case .overrides: "应用配置与存档"
+        case .validation: "校验启动环境"
+        }
+    }
+
+    public var systemImage: String {
+        switch self {
+        case .detecting: "doc.zipper"
+        case .runtime: "shippingbox"
+        case .files: "arrow.down.circle"
+        case .overrides: "slider.horizontal.3"
+        case .validation: "play.circle"
+        }
+    }
+}
+
 public struct ModpackImportProgressUpdate: Sendable {
     public let packName: String
     public let status: String
+    public let stage: ModpackImportStage
+    public let stageProgress: Double
     public let progress: Double
     public let finishedFiles: Int
     public let totalFiles: Int
+
+    public init(
+        packName: String,
+        status: String,
+        stage: ModpackImportStage = .detecting,
+        stageProgress: Double? = nil,
+        progress: Double,
+        finishedFiles: Int,
+        totalFiles: Int
+    ) {
+        self.packName = packName
+        self.status = status
+        self.stage = stage
+        self.stageProgress = min(max(stageProgress ?? progress, 0), 1)
+        self.progress = min(max(progress, 0), 1)
+        self.finishedFiles = finishedFiles
+        self.totalFiles = totalFiles
+    }
 }
 
 public typealias ModpackImportProgressHandler = (ModpackImportProgressUpdate) -> Void
@@ -125,12 +175,23 @@ public enum ModpackImporter {
         progress?(.init(
             packName: instanceName ?? zipURL.deletingPathExtension().lastPathComponent,
             status: "正在识别整合包",
+            stage: .detecting,
+            stageProgress: 0.2,
             progress: 0,
             finishedFiles: 0,
             totalFiles: 0
         ))
         let zipURL = try resolveNestedModpackURL(zipURL)
         let format = try detectFormat(of: zipURL)
+        progress?(.init(
+            packName: instanceName ?? zipURL.deletingPathExtension().lastPathComponent,
+            status: "已识别整合包格式",
+            stage: .detecting,
+            stageProgress: 1,
+            progress: 0.01,
+            finishedFiles: 0,
+            totalFiles: 0
+        ))
         switch format {
         case .modrinth:
             return try await installModrinth(zipURL: zipURL, into: minecraftDirectory, instanceName: instanceName, progress: progress)
@@ -177,15 +238,16 @@ public enum ModpackImporter {
                 (.quilt, pack.dependencies["quilt-loader"])
             ]
         )
-        progress?(.init(packName: name, status: "正在安装 Minecraft \(requirement.minecraftVersion)", progress: 0.02, finishedFiles: 0, totalFiles: pack.files.count))
-        try await installRuntime(requirement, name: instanceId, into: minecraftDirectory)
+        progress?(.init(packName: name, status: "正在安装 Minecraft \(requirement.minecraftVersion)", stage: .runtime, stageProgress: 0.05, progress: 0.02, finishedFiles: 0, totalFiles: pack.files.count))
+        try await installRuntime(requirement, name: instanceId, packName: name, totalFiles: pack.files.count, into: minecraftDirectory, progress: progress)
+        try Task.checkCancellation()
 
         try FileManager.default.createDirectory(at: instanceDir.appending(path: "mods"), withIntermediateDirectories: true)
 
         // 1. 下载所有 file 到 instanceDir/<path>
         let files = pack.files.filter { $0.env?.client != "unsupported" }
         log("Modrinth 整合包安装：\(name)，共 \(files.count) 个文件")
-        progress?(.init(packName: name, status: "正在解决依赖", progress: 0.04, finishedFiles: 0, totalFiles: files.count))
+        progress?(.init(packName: name, status: "正在解决依赖", stage: .files, stageProgress: 0.02, progress: 0.12, finishedFiles: 0, totalFiles: files.count))
         let downloadBaseProgress = 0.12
         let downloadProgressWeight = 0.76
 
@@ -200,6 +262,8 @@ public enum ModpackImporter {
             progress?(.init(
                 packName: name,
                 status: "正在导入整合包文件",
+                stage: .files,
+                stageProgress: fileProgress,
                 progress: progressValue,
                 finishedFiles: finished,
                 totalFiles: files.count
@@ -209,16 +273,16 @@ public enum ModpackImporter {
 
         // 2. 写出 overrides 目录（Modrinth 标准放在 overrides/ 子目录，必须传 sourceSubdir，
         //    否则 extractOverrides 的无 sub 分支会跳过所有含 "/" 的条目，config/资源包/光影一个都不解压）
-        progress?(.init(packName: name, status: "正在解压覆盖文件", progress: 0.93, finishedFiles: files.count, totalFiles: files.count))
+        progress?(.init(packName: name, status: "正在解压覆盖文件", stage: .overrides, stageProgress: 0.1, progress: 0.90, finishedFiles: files.count, totalFiles: files.count))
         try await extractOverrides(zipURL: zipURL, into: instanceDir, sourceSubdir: "overrides")
         try await extractOverrides(zipURL: zipURL, into: instanceDir, sourceSubdir: "client-overrides")
 
-        progress?(.init(packName: name, status: "正在校验实例", progress: 0.97, finishedFiles: pack.files.count, totalFiles: pack.files.count))
+        progress?(.init(packName: name, status: "正在校验实例", stage: .validation, stageProgress: 0.35, progress: 0.97, finishedFiles: pack.files.count, totalFiles: pack.files.count))
         try validateInstance(at: versionDir, in: minecraftDirectory, requirement: requirement)
 
         log("Modrinth 整合包安装完成：\(name)")
         installCompleted = true
-        progress?(.init(packName: name, status: "导入完成", progress: 1, finishedFiles: files.count, totalFiles: files.count))
+        progress?(.init(packName: name, status: "导入完成", stage: .validation, stageProgress: 1, progress: 1, finishedFiles: files.count, totalFiles: files.count))
         return instanceDir
     }
 
@@ -254,8 +318,9 @@ public enum ModpackImporter {
             minecraftVersion: mcVersion,
             loaders: declaredLoaders
         )
-        progress?(.init(packName: name, status: "正在安装 Minecraft \(requirement.minecraftVersion)", progress: 0.02, finishedFiles: 0, totalFiles: manifest["files"].arrayValue.count))
-        try await installRuntime(requirement, name: instanceId, into: minecraftDirectory)
+        progress?(.init(packName: name, status: "正在安装 Minecraft \(requirement.minecraftVersion)", stage: .runtime, stageProgress: 0.05, progress: 0.02, finishedFiles: 0, totalFiles: manifest["files"].arrayValue.count))
+        try await installRuntime(requirement, name: instanceId, packName: name, totalFiles: manifest["files"].arrayValue.count, into: minecraftDirectory, progress: progress)
+        try Task.checkCancellation()
 
         try FileManager.default.createDirectory(at: instanceDir.appending(path: "mods"), withIntermediateDirectories: true)
 
@@ -264,7 +329,7 @@ public enum ModpackImporter {
         // 的作者文件会明确失败，而不是静默生成一个缺 Mod 的实例。
         let mods = manifest["files"].arrayValue
         log("CurseForge 整合包安装：\(name)，共 \(mods.count) 个 mod")
-        progress?(.init(packName: name, status: "正在解决并下载整合包依赖", progress: 0.12, finishedFiles: 0, totalFiles: mods.count))
+        progress?(.init(packName: name, status: "正在解决并下载整合包依赖", stage: .files, stageProgress: 0.02, progress: 0.12, finishedFiles: 0, totalFiles: mods.count))
         let downloadItems = try mods.map { mod -> DownloadItem in
             let projectID = try mod["projectID"].int.unwrap("CurseForge 清单缺少 projectID。")
             let fileID = try mod["fileID"].int.unwrap("CurseForge 清单缺少 fileID。")
@@ -279,6 +344,8 @@ public enum ModpackImporter {
             progress?(.init(
                 packName: name,
                 status: "正在下载 CurseForge 依赖",
+                stage: .files,
+                stageProgress: fileProgress,
                 progress: 0.12 + fileProgress * 0.68,
                 finishedFiles: finished,
                 totalFiles: mods.count
@@ -288,14 +355,14 @@ public enum ModpackImporter {
         // 2. overrides（CurseForge 整合包的 overrides/ 子目录包含 config 等运行时文件，
         //    部分第三方/离线整合包还会把 mod 打进 overrides/mods；之前不传 sub 导致全部被跳过）
         let overridesDirectory = manifest["overrides"].stringValue.isEmpty ? "overrides" : manifest["overrides"].stringValue
-        progress?(.init(packName: name, status: "正在解压覆盖文件", progress: 0.82, finishedFiles: mods.count, totalFiles: mods.count))
+        progress?(.init(packName: name, status: "正在解压覆盖文件", stage: .overrides, stageProgress: 0.15, progress: 0.84, finishedFiles: mods.count, totalFiles: mods.count))
         try await extractOverrides(zipURL: zipURL, into: instanceDir, sourceSubdir: overridesDirectory)
 
-        progress?(.init(packName: name, status: "正在校验实例", progress: 0.97, finishedFiles: mods.count, totalFiles: mods.count))
+        progress?(.init(packName: name, status: "正在校验实例", stage: .validation, stageProgress: 0.35, progress: 0.97, finishedFiles: mods.count, totalFiles: mods.count))
         try validateInstance(at: versionDir, in: minecraftDirectory, requirement: requirement)
         log("CurseForge 整合包安装完成：\(name)")
         installCompleted = true
-        progress?(.init(packName: name, status: "导入完成", progress: 1, finishedFiles: mods.count, totalFiles: mods.count))
+        progress?(.init(packName: name, status: "导入完成", stage: .validation, stageProgress: 1, progress: 1, finishedFiles: mods.count, totalFiles: mods.count))
         return instanceDir
     }
 
@@ -330,20 +397,21 @@ public enum ModpackImporter {
                 (.liteLoader, manifest["liteloader"].string)
             ]
         )
-        progress?(.init(packName: name, status: "正在安装 Minecraft \(requirement.minecraftVersion)", progress: 0.02, finishedFiles: 0, totalFiles: 0))
-        try await installRuntime(requirement, name: instanceId, into: minecraftDirectory)
+        progress?(.init(packName: name, status: "正在安装 Minecraft \(requirement.minecraftVersion)", stage: .runtime, stageProgress: 0.05, progress: 0.02, finishedFiles: 0, totalFiles: 0))
+        try await installRuntime(requirement, name: instanceId, packName: name, totalFiles: 0, into: minecraftDirectory, progress: progress)
+        try Task.checkCancellation()
 
         try FileManager.default.createDirectory(at: instanceDir, withIntermediateDirectories: true)
 
         // HMCL 把 override/ 直接当 .minecraft 内容展开
-        progress?(.init(packName: name, status: "正在解压覆盖文件", progress: 0.35, finishedFiles: 0, totalFiles: 0))
+        progress?(.init(packName: name, status: "正在解压覆盖文件", stage: .overrides, stageProgress: 0.15, progress: 0.84, finishedFiles: 0, totalFiles: 0))
         try await extractOverrides(zipURL: zipURL, into: instanceDir, sourceSubdir: "override")
 
-        progress?(.init(packName: name, status: "正在校验实例", progress: 0.94, finishedFiles: 0, totalFiles: 0))
+        progress?(.init(packName: name, status: "正在校验实例", stage: .validation, stageProgress: 0.35, progress: 0.96, finishedFiles: 0, totalFiles: 0))
         try validateInstance(at: versionDir, in: minecraftDirectory, requirement: requirement)
         log("HMCL 整合包安装完成：\(name)")
         installCompleted = true
-        progress?(.init(packName: name, status: "导入完成", progress: 1, finishedFiles: 0, totalFiles: 0))
+        progress?(.init(packName: name, status: "导入完成", stage: .validation, stageProgress: 1, progress: 1, finishedFiles: 0, totalFiles: 0))
         return instanceDir
     }
 
@@ -373,7 +441,7 @@ public enum ModpackImporter {
         try FileManager.default.createDirectory(at: versionDir, withIntermediateDirectories: true)
 
         let files = entries.filter { !$0.path.hasSuffix("/") && normalizedArchivePath($0.path).hasPrefix(found.prefix) }
-        progress?(.init(packName: name, status: "正在拷贝整合包文件", progress: 0.1, finishedFiles: 0, totalFiles: files.count))
+        progress?(.init(packName: name, status: "正在拷贝整合包文件", stage: .files, stageProgress: 0.02, progress: 0.12, finishedFiles: 0, totalFiles: files.count))
 
         for (index, entry) in files.enumerated() {
             let normalized = normalizedArchivePath(entry.path)
@@ -388,6 +456,8 @@ public enum ModpackImporter {
             progress?(.init(
                 packName: name,
                 status: "正在拷贝 \(relative)",
+                stage: .files,
+                stageProgress: progressForFile(index, 1, total: files.count, base: 0, weight: 1),
                 progress: progressForFile(index, 1, total: files.count, base: 0.1, weight: 0.85),
                 finishedFiles: index + 1,
                 totalFiles: files.count
@@ -395,12 +465,22 @@ public enum ModpackImporter {
         }
 
         try renameSimpleVersionFilesIfNeeded(in: versionDir, from: found.name, to: instanceId)
-        progress?(.init(packName: name, status: "正在补全游戏依赖", progress: 0.96, finishedFiles: files.count, totalFiles: files.count))
+        progress?(.init(packName: name, status: "正在补全游戏依赖", stage: .validation, stageProgress: 0.2, progress: 0.96, finishedFiles: files.count, totalFiles: files.count))
         let instance = try validateInstance(at: versionDir, in: minecraftDirectory, requirement: nil)
-        try await MinecraftInstaller.complete(instance)
+        try await MinecraftInstaller.complete(instance) { value, status in
+            progress?(.init(
+                packName: name,
+                status: status,
+                stage: .validation,
+                stageProgress: 0.2 + value * 0.75,
+                progress: 0.96 + value * 0.03,
+                finishedFiles: files.count,
+                totalFiles: files.count
+            ))
+        }
         try validateInstance(at: versionDir, in: minecraftDirectory, requirement: nil)
         installCompleted = true
-        progress?(.init(packName: name, status: "导入完成", progress: 1, finishedFiles: files.count, totalFiles: files.count))
+        progress?(.init(packName: name, status: "导入完成", stage: .validation, stageProgress: 1, progress: 1, finishedFiles: files.count, totalFiles: files.count))
         return versionDir
     }
 
@@ -411,6 +491,7 @@ public enum ModpackImporter {
         let archive = try Archive(url: zipURL, accessMode: .read)
         let sub = sourceSubdir
         for entry in Array(archive) {
+            try Task.checkCancellation()
             guard !entry.path.hasSuffix("/") else { continue } // skip dirs
             // 规范化：去掉 "./" 前缀，统一分隔符为 "/"，子目录前缀按小写匹配（兼容 overrides / Overrides 等）
             let raw = entry.path
@@ -471,7 +552,10 @@ public enum ModpackImporter {
     private static func installRuntime(
         _ requirement: RuntimeRequirement,
         name: String,
-        into minecraftDirectory: MinecraftDirectory
+        packName: String,
+        totalFiles: Int,
+        into minecraftDirectory: MinecraftDirectory,
+        progress: ModpackImportProgressHandler?
     ) async throws {
         _ = try await MinecraftInstaller.install(
             MinecraftVersion(displayName: requirement.minecraftVersion),
@@ -479,7 +563,17 @@ public enum ModpackImporter {
             minecraftDirectory: minecraftDirectory,
             loader: requirement.loader,
             loaderVersion: requirement.loaderVersion
-        )
+        ) { value, status in
+            progress?(.init(
+                packName: packName,
+                status: status,
+                stage: .runtime,
+                stageProgress: value,
+                progress: 0.02 + value * 0.09,
+                finishedFiles: 0,
+                totalFiles: totalFiles
+            ))
+        }
     }
 
     @discardableResult

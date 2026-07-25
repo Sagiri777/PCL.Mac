@@ -44,7 +44,8 @@ public class MinecraftInstaller {
         name: String,
         minecraftDirectory: MinecraftDirectory,
         loader: ClientBrand? = nil,
-        loaderVersion: String? = nil
+        loaderVersion: String? = nil,
+        progress: ((Double, String) -> Void)? = nil
     ) async throws -> MinecraftInstance {
         let task = MinecraftInstallTask(
             minecraftVersion: minecraftVersion,
@@ -53,9 +54,15 @@ public class MinecraftInstaller {
         ) { _ in }
 
         try await downloadClientManifest(task)
+        try Task.checkCancellation()
+        progress?(0.08, "已下载游戏清单")
         try await downloadAssetIndex(task)
+        try Task.checkCancellation()
+        progress?(0.16, "已下载资源索引")
         updateProgress(task)
         try await downloadClientJar(task)
+        try Task.checkCancellation()
+        progress?(0.28, "已下载 Minecraft 客户端")
 
         if let loader {
             guard let loaderVersion, !loaderVersion.isEmpty else {
@@ -93,25 +100,39 @@ public class MinecraftInstaller {
             guard task.manifest != nil else {
                 throw MyLocalizedError(reason: "无法解析安装后的 \(loader.getName()) 客户端清单。")
             }
+            try Task.checkCancellation()
+            progress?(0.48, "已安装 \(loader.getName()) \(loaderVersion)")
+        } else {
+            progress?(0.48, "原版游戏环境已就绪")
         }
 
         modifyId(task)
         try await downloadHashResourcesFiles(task)
+        try Task.checkCancellation()
+        progress?(0.72, "已补全游戏资源")
         try await downloadLibraries(task)
+        try Task.checkCancellation()
+        progress?(0.86, "已补全运行库")
         try await downloadNatives(task)
+        try Task.checkCancellation()
         try unzipNatives(task)
+        progress?(0.96, "已准备本机依赖")
         finalWork(task)
 
         MinecraftInstance.clearCache(for: task.versionURL)
         guard let instance = MinecraftInstance.create(minecraftDirectory, task.versionURL) else {
             throw MyLocalizedError(reason: "Minecraft 安装完成，但生成的实例无法加载。")
         }
+        progress?(1, "游戏环境安装完成")
         return instance
     }
 
     /// Downloads and validates all shared assets, libraries and natives required
     /// by an already imported instance.
-    public static func complete(_ instance: MinecraftInstance) async throws {
+    public static func complete(
+        _ instance: MinecraftInstance,
+        progress: ((Double, String) -> Void)? = nil
+    ) async throws {
         let architecture: Architecture = Architecture.system == .x64
             ? .x64
             : (instance.isUsingRosetta ? .x64 : .arm64)
@@ -123,12 +144,23 @@ public class MinecraftInstaller {
         ) { _ in }
         task.manifest = instance.manifest
         try await downloadAssetIndex(task)
+        try Task.checkCancellation()
+        progress?(0.15, "已读取资源索引")
         try await downloadClientJar(task)
+        try Task.checkCancellation()
+        progress?(0.30, "已补全客户端")
         try await downloadHashResourcesFiles(task)
+        try Task.checkCancellation()
+        progress?(0.65, "已补全游戏资源")
         try await downloadLibraries(task)
+        try Task.checkCancellation()
+        progress?(0.82, "已补全运行库")
         try await downloadNatives(task)
+        try Task.checkCancellation()
         try unzipNatives(task)
+        progress?(0.95, "已准备本机依赖")
         finalWork(task)
+        progress?(1, "游戏依赖补全完成")
     }
     
     // MARK: 下载客户端清单

@@ -118,9 +118,10 @@ public class MultiFileDownloader {
                     try? await Task.sleep(for: .seconds(0.1))
                     if Task.isCancelled { break }
                     let snapshot = await self.progressState.snapshot()
+                    let normalizedProgress = snapshot.progress / Double(max(self.total, 1))
                     await MainActor.run {
-                        progress?(snapshot.progress, snapshot.finishedCount)
-                        task?.currentStagePercentage = snapshot.progress
+                        progress?(normalizedProgress, snapshot.finishedCount)
+                        task?.currentStagePercentage = normalizedProgress
                     }
                 }
             }
@@ -154,9 +155,10 @@ public class MultiFileDownloader {
         }
         
         let snapshot = await progressState.snapshot()
+        let normalizedProgress = snapshot.progress / Double(max(total, 1))
         await MainActor.run {
-            progress?(snapshot.progress, snapshot.finishedCount)
-            task?.currentStagePercentage = snapshot.progress
+            progress?(normalizedProgress, snapshot.finishedCount)
+            task?.currentStagePercentage = normalizedProgress
         }
     }
     

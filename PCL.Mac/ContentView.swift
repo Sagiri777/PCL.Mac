@@ -13,6 +13,7 @@ struct ContentView: View {
     @ObservedObject private var popupManager: PopupManager = .shared
     @ObservedObject private var browserLogin: BrowserLoginController = .shared
     @ObservedObject private var settings: AppSettings = .shared
+    @ObservedObject private var modpackImportManager: ModpackImportManager = .shared
 
     @State private var isLeftTabVisible = true
     @State private var isGlobalDropHovering = false
@@ -89,6 +90,9 @@ struct ContentView: View {
         .sheet(isPresented: $browserLogin.isPresented) {
             BrowserLoginView()
         }
+        .sheet(isPresented: $modpackImportManager.isPresented) {
+            ModpackImportView(manager: modpackImportManager)
+        }
         .dropDestination(for: URL.self) { urls, _ in
             let captured = urls
             Task {
@@ -138,8 +142,6 @@ struct ContentView: View {
             return
         }
 
-        var importedPacks = 0
-        var lastImportedPack: URL?
         var installedMods = 0
         var failed = 0
 
@@ -148,22 +150,11 @@ struct ContentView: View {
                 hint("请先选择 Minecraft 文件夹！", .critical)
                 return
             }
-            hint("正在导入 \(classification.modpacks.count) 个整合包……")
-            for packURL in classification.modpacks {
-                do {
-                    lastImportedPack = try await ModpackImporter.install(zipURL: packURL, into: directory)
-                    importedPacks += 1
-                } catch {
-                    failed += 1
-                    err("整合包 \(packURL.lastPathComponent) 导入失败：\(error.localizedDescription)")
-                }
-            }
-            if importedPacks > 0 {
-                if let lastImportedPack {
-                    AppSettings.shared.defaultInstance = lastImportedPack.lastPathComponent
-                }
-                directory.loadInnerInstances()
-            }
+            modpackImportManager.present(
+                urls: classification.modpacks,
+                directory: directory,
+                autoStart: true
+            )
         }
 
         if !classification.mods.isEmpty {
@@ -178,7 +169,7 @@ struct ContentView: View {
         }
 
         var parts: [String] = []
-        if importedPacks > 0 { parts.append("已导入 \(importedPacks) 个整合包") }
+        if !classification.modpacks.isEmpty { parts.append("已打开整合包导入任务") }
         if installedMods > 0 { parts.append("已安装 \(installedMods) 个 mod") }
         if failed > 0 { parts.append("失败 \(failed) 项") }
         hint(parts.isEmpty ? "没有可导入内容" : parts.joined(separator: "，"), failed > 0 ? .critical : .finish)

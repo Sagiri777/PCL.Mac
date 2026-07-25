@@ -127,24 +127,11 @@ struct VersionSelectView: View, SubRouteContainer {
         panel.prompt = "导入"
 
         guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
-        let urls = panel.urls
-        Task {
-            hint("正在导入 \(urls.count) 个整合包……")
-            var lastImportedURL: URL?
-            do {
-                for url in urls {
-                    lastImportedURL = try await ModpackImporter.install(zipURL: url, into: directory)
-                }
-                if let lastImportedURL {
-                    settings.defaultInstance = lastImportedURL.lastPathComponent
-                }
-                directory.loadInnerInstances()
-                hint("整合包导入完成，可直接启动！", .finish)
-            } catch {
-                err("整合包导入失败：\(error.localizedDescription)")
-                hint("整合包导入失败：\(error.localizedDescription)", .critical)
-            }
-        }
+        ModpackImportManager.shared.present(
+            urls: panel.urls,
+            directory: directory,
+            autoStart: false
+        )
     }
 }
 
