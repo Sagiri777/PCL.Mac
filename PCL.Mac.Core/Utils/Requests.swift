@@ -150,13 +150,20 @@ public final class Requests: @unchecked Sendable {
     /// 构造带代理配置的 URLSessionConfiguration。
     public static func makeConfiguration(forceUseProxy: Bool = false) -> URLSessionConfiguration {
         let settings = AppSettings.shared
+        let config = URLSessionConfiguration.default
+        // Keep request failures bounded and let URLSession wait briefly when a
+        // Mac wakes or changes networks, rather than immediately failing every
+        // asset in a batch.
+        config.timeoutIntervalForRequest = 30
+        config.timeoutIntervalForResource = 5 * 60
+        config.waitsForConnectivity = true
+        config.httpMaximumConnectionsPerHost = 8
         guard forceUseProxy,
               settings.proxyEnabled,
               !settings.proxyHost.isEmpty,
               settings.proxyPort > 0 else {
-            return URLSessionConfiguration.default
+            return config
         }
-        let config = URLSessionConfiguration.default
         config.connectionProxyDictionary = [
             kCFProxyTypeKey: kCFProxyTypeHTTP,
             kCFNetworkProxiesHTTPEnable: true,

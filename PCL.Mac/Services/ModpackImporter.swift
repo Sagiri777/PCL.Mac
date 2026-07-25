@@ -161,21 +161,39 @@ public enum ModpackImporter {
         // 之前多套一层 ".minecraft"，导致 jar 落到 versions/<name>/.minecraft/mods，启动器和 mod 列表都看不到。
         let instanceDir = versionDir
 
+        var installCompleted = false
+        defer {
+            if !installCompleted {
+                cleanupIncompleteInstance(at: versionDir)
+            }
+        }
+
+        let requirement = try runtimeRequirement(
+            minecraftVersion: pack.dependencies["minecraft"],
+            loaders: [
+                (.fabric, pack.dependencies["fabric-loader"]),
+                (.forge, pack.dependencies["forge"]),
+                (.neoforge, pack.dependencies["neoforge"]),
+                (.quilt, pack.dependencies["quilt-loader"])
+            ]
+        )
+        progress?(.init(packName: name, status: "正在安装 Minecraft \(requirement.minecraftVersion)", progress: 0.02, finishedFiles: 0, totalFiles: pack.files.count))
+        try await installRuntime(requirement, name: instanceId, into: minecraftDirectory)
+
         try FileManager.default.createDirectory(at: instanceDir.appending(path: "mods"), withIntermediateDirectories: true)
 
         // 1. 下载所有 file 到 instanceDir/<path>
         let files = pack.files.filter { $0.env?.client != "unsupported" }
         log("Modrinth 整合包安装：\(name)，共 \(files.count) 个文件")
         progress?(.init(packName: name, status: "正在解决依赖", progress: 0.04, finishedFiles: 0, totalFiles: files.count))
-        let downloadBaseProgress = 0.08
-        let downloadProgressWeight = 0.84
+        let downloadBaseProgress = 0.12
+        let downloadProgressWeight = 0.76
 
-        let downloadItems: [DownloadItem] = files.compactMap { file in
+        let downloadItems: [DownloadItem] = try files.map { file in
             guard let url = file.downloads.first else {
-                log("跳过无下载源的文件：\(file.path)")
-                return nil
+                throw MyLocalizedError(reason: "整合包文件 \(file.path) 没有可用下载源。")
             }
-            return DownloadItem(url, instanceDir.appending(path: file.path), sha1: file.hashes.sha1)
+            return DownloadItem(url, try safeDestination(relativePath: file.path, under: instanceDir), sha1: file.hashes.sha1)
         }
         let downloader = MultiFileDownloader(items: downloadItems, replaceMethod: .skip, networkCategory: .gameDownload) { fileProgress, finished in
             let progressValue = downloadBaseProgress + fileProgress * downloadProgressWeight
@@ -195,27 +213,11 @@ public enum ModpackImporter {
         try await extractOverrides(zipURL: zipURL, into: instanceDir, sourceSubdir: "overrides")
         try await extractOverrides(zipURL: zipURL, into: instanceDir, sourceSubdir: "client-overrides")
 
-        // 3. 构造版本 JSON
-        progress?(.init(packName: name, status: "正在解决依赖", progress: 0.97, finishedFiles: pack.files.count, totalFiles: pack.files.count))
-        let mcVersion = pack.dependencies["minecraft"] ?? ""
-        let fabricLoader = pack.dependencies["fabric-loader"]
-        let forgeLoader = pack.dependencies["forge"]
-        let neoForgeLoader = pack.dependencies["neoforge"]
-        let quiltLoader = pack.dependencies["quilt-loader"]
-
-        let versionJSON = try buildInheritsVersionJSON(
-            inheritsFrom: mcVersion,
-            versionId: instanceId,
-            loaders: [
-                fabricLoader.map { "fabric-loader:\($0)" },
-                forgeLoader.map { "forge:\($0)" },
-                neoForgeLoader.map { "neoforge:\($0)" },
-                quiltLoader.map { "quilt-loader:\($0)" }
-            ].compactMap { $0 }
-        )
-        try versionJSON.write(to: versionDir.appending(path: "\(instanceId).json"))
+        progress?(.init(packName: name, status: "正在校验实例", progress: 0.97, finishedFiles: pack.files.count, totalFiles: pack.files.count))
+        try validateInstance(at: versionDir, in: minecraftDirectory, requirement: requirement)
 
         log("Modrinth 整合包安装完成：\(name)")
+        installCompleted = true
         progress?(.init(packName: name, status: "导入完成", progress: 1, finishedFiles: files.count, totalFiles: files.count))
         return instanceDir
     }
@@ -229,51 +231,70 @@ public enum ModpackImporter {
         progress: ModpackImportProgressHandler? = nil
     ) async throws -> URL {
         let manifest = try parseCurseForge(zipURL)
-        let mcVersion = manifest["minecraft"]["version"].stringValue
+        let mcVersion = minecraftVersion(from: manifest)
         let name = instanceName ?? manifest["name"].stringValue
         let instanceId = uniqueInstanceDirectoryName(sanitizeDirName(name), in: minecraftDirectory)
         let versionDir = minecraftDirectory.versionsURL.appending(path: instanceId)
         let instanceDir = versionDir
 
+        var installCompleted = false
+        defer {
+            if !installCompleted {
+                cleanupIncompleteInstance(at: versionDir)
+            }
+        }
+
+        let loaderEntries = manifest["minecraft"]["modLoaders"].arrayValue
+        let preferredLoaderEntries = loaderEntries.filter { $0["primary"].boolValue }
+        let declaredLoaders: [(ClientBrand, String?)] = (preferredLoaderEntries.isEmpty ? loaderEntries : preferredLoaderEntries).compactMap { loader in
+            guard let id = loader["id"].string else { return nil }
+            return parseCurseForgeLoader(id)
+        }
+        let requirement = try runtimeRequirement(
+            minecraftVersion: mcVersion,
+            loaders: declaredLoaders
+        )
+        progress?(.init(packName: name, status: "正在安装 Minecraft \(requirement.minecraftVersion)", progress: 0.02, finishedFiles: 0, totalFiles: manifest["files"].arrayValue.count))
+        try await installRuntime(requirement, name: instanceId, into: minecraftDirectory)
+
         try FileManager.default.createDirectory(at: instanceDir.appending(path: "mods"), withIntermediateDirectories: true)
 
-        // 1. 遍历 mods 数组，依次从 CurseForge 拉
-        // 注：完整实现需要 CurseForge API Key；这里只拉直链
+        // 1. CurseForge 标准清单只提供 projectID/fileID。官方无 Key
+        // 下载端点会重定向到实际文件，因此可以完整解决依赖；禁用第三方下载
+        // 的作者文件会明确失败，而不是静默生成一个缺 Mod 的实例。
         let mods = manifest["files"].arrayValue
         log("CurseForge 整合包安装：\(name)，共 \(mods.count) 个 mod")
-        progress?(.init(packName: name, status: "正在解决依赖", progress: 0.12, finishedFiles: 0, totalFiles: mods.count))
-        for mod in mods {
-            // CurseForge 文件 ID — 需要调用 CurseForge API 解析 projectID/fileID 为下载链接
-            // 这里保留 hook，留待 Stage 2+ 集成完整
-            log("CurseForge mod \(mod["projectID"]) / \(mod["fileID"]) 需要 CurseForge API 解析（占位）")
+        progress?(.init(packName: name, status: "正在解决并下载整合包依赖", progress: 0.12, finishedFiles: 0, totalFiles: mods.count))
+        let downloadItems = try mods.map { mod -> DownloadItem in
+            let projectID = try mod["projectID"].int.unwrap("CurseForge 清单缺少 projectID。")
+            let fileID = try mod["fileID"].int.unwrap("CurseForge 清单缺少 fileID。")
+            let suppliedURL = mod["url"].url
+            let downloadURL = suppliedURL ?? URL(string: "https://www.curseforge.com/api/v1/mods/\(projectID)/files/\(fileID)/download")!
+            let suppliedName = mod["fileName"].string?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let fileName = (suppliedName?.isEmpty == false ? suppliedName! : "curseforge-\(projectID)-\(fileID).jar")
+            let destination = try safeDestination(relativePath: "mods/\(fileName)", under: instanceDir)
+            return DownloadItem(downloadURL, destination)
         }
+        try await MultiFileDownloader(items: downloadItems, replaceMethod: .skip, networkCategory: .gameDownload) { fileProgress, finished in
+            progress?(.init(
+                packName: name,
+                status: "正在下载 CurseForge 依赖",
+                progress: 0.12 + fileProgress * 0.68,
+                finishedFiles: finished,
+                totalFiles: mods.count
+            ))
+        }.start()
 
         // 2. overrides（CurseForge 整合包的 overrides/ 子目录包含 config 等运行时文件，
         //    部分第三方/离线整合包还会把 mod 打进 overrides/mods；之前不传 sub 导致全部被跳过）
-        progress?(.init(packName: name, status: "正在解压覆盖文件", progress: 0.70, finishedFiles: 0, totalFiles: mods.count))
-        try await extractOverrides(zipURL: zipURL, into: instanceDir, sourceSubdir: "overrides")
+        let overridesDirectory = manifest["overrides"].stringValue.isEmpty ? "overrides" : manifest["overrides"].stringValue
+        progress?(.init(packName: name, status: "正在解压覆盖文件", progress: 0.82, finishedFiles: mods.count, totalFiles: mods.count))
+        try await extractOverrides(zipURL: zipURL, into: instanceDir, sourceSubdir: overridesDirectory)
 
-        // 3. JSON
-        progress?(.init(packName: name, status: "正在写入实例配置", progress: 0.92, finishedFiles: 0, totalFiles: mods.count))
-        let loaders: [String] = {
-            var out: [String] = []
-            for loader in manifest["minecraft"]["modLoaders"].arrayValue {
-                if let id = loader["id"].string {
-                    if id.hasPrefix("forge-") { out.append("forge:\(id.dropFirst("forge-".count))") }
-                    else if id.hasPrefix("neoforge-") { out.append("neoforge:\(id.dropFirst("neoforge-".count))") }
-                    else if id.hasPrefix("fabric-") { out.append("fabric-loader:\(id.dropFirst("fabric-".count))") }
-                }
-            }
-            return out
-        }()
-
-        let versionJSON = try buildInheritsVersionJSON(
-            inheritsFrom: mcVersion,
-            versionId: instanceId,
-            loaders: loaders
-        )
-        try versionJSON.write(to: versionDir.appending(path: "\(instanceId).json"))
-        log("CurseForge 整合包安装完成（部分）：\(name)")
+        progress?(.init(packName: name, status: "正在校验实例", progress: 0.97, finishedFiles: mods.count, totalFiles: mods.count))
+        try validateInstance(at: versionDir, in: minecraftDirectory, requirement: requirement)
+        log("CurseForge 整合包安装完成：\(name)")
+        installCompleted = true
         progress?(.init(packName: name, status: "导入完成", progress: 1, finishedFiles: mods.count, totalFiles: mods.count))
         return instanceDir
     }
@@ -287,11 +308,30 @@ public enum ModpackImporter {
         progress: ModpackImportProgressHandler? = nil
     ) async throws -> URL {
         let manifest = try parseHMCL(zipURL)
-        let mcVersion = manifest["minecraft"]["version"].stringValue
+        let mcVersion = minecraftVersion(from: manifest)
         let name = instanceName ?? manifest["name"].stringValue
         let instanceId = uniqueInstanceDirectoryName(sanitizeDirName(name), in: minecraftDirectory)
         let versionDir = minecraftDirectory.versionsURL.appending(path: instanceId)
         let instanceDir = versionDir
+
+        var installCompleted = false
+        defer {
+            if !installCompleted {
+                cleanupIncompleteInstance(at: versionDir)
+            }
+        }
+
+        let requirement = try runtimeRequirement(
+            minecraftVersion: mcVersion,
+            loaders: [
+                (.forge, manifest["forge"].string),
+                (.fabric, manifest["fabricLoader"].string),
+                (.quilt, manifest["quiltLoader"].string),
+                (.liteLoader, manifest["liteloader"].string)
+            ]
+        )
+        progress?(.init(packName: name, status: "正在安装 Minecraft \(requirement.minecraftVersion)", progress: 0.02, finishedFiles: 0, totalFiles: 0))
+        try await installRuntime(requirement, name: instanceId, into: minecraftDirectory)
 
         try FileManager.default.createDirectory(at: instanceDir, withIntermediateDirectories: true)
 
@@ -299,23 +339,10 @@ public enum ModpackImporter {
         progress?(.init(packName: name, status: "正在解压覆盖文件", progress: 0.35, finishedFiles: 0, totalFiles: 0))
         try await extractOverrides(zipURL: zipURL, into: instanceDir, sourceSubdir: "override")
 
-        // 加载器信息（HMCL 用 forge 版本号）
-        progress?(.init(packName: name, status: "正在解决依赖", progress: 0.82, finishedFiles: 0, totalFiles: 0))
-        let loaders: [String] = {
-            var out: [String] = []
-            if let forge = manifest["forge"].string { out.append("forge:\(forge)") }
-            if let lite = manifest["liteloader"].string { out.append("com.mumfrey:liteloader:\(lite)") }
-            if let fabric = manifest["fabricLoader"].string { out.append("fabric-loader:\(fabric)") }
-            return out
-        }()
-
-        let versionJSON = try buildInheritsVersionJSON(
-            inheritsFrom: mcVersion,
-            versionId: instanceId,
-            loaders: loaders
-        )
-        try versionJSON.write(to: versionDir.appending(path: "\(instanceId).json"))
+        progress?(.init(packName: name, status: "正在校验实例", progress: 0.94, finishedFiles: 0, totalFiles: 0))
+        try validateInstance(at: versionDir, in: minecraftDirectory, requirement: requirement)
         log("HMCL 整合包安装完成：\(name)")
+        installCompleted = true
         progress?(.init(packName: name, status: "导入完成", progress: 1, finishedFiles: 0, totalFiles: 0))
         return instanceDir
     }
@@ -337,6 +364,12 @@ public enum ModpackImporter {
         let name = instanceName ?? found.name
         let instanceId = uniqueInstanceDirectoryName(sanitizeDirName(name), in: minecraftDirectory)
         let versionDir = minecraftDirectory.versionsURL.appending(path: instanceId)
+        var installCompleted = false
+        defer {
+            if !installCompleted {
+                cleanupIncompleteInstance(at: versionDir)
+            }
+        }
         try FileManager.default.createDirectory(at: versionDir, withIntermediateDirectories: true)
 
         let files = entries.filter { !$0.path.hasSuffix("/") && normalizedArchivePath($0.path).hasPrefix(found.prefix) }
@@ -346,7 +379,7 @@ public enum ModpackImporter {
             let normalized = normalizedArchivePath(entry.path)
             let relative = String(normalized.dropFirst(found.prefix.count)).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
             guard !relative.isEmpty else { continue }
-            let target = versionDir.appending(path: relative)
+            let target = try safeDestination(relativePath: relative, under: versionDir)
             try target.ensureParentDirectoryExists()
             if FileManager.default.fileExists(atPath: target.path) {
                 try FileManager.default.removeItem(at: target)
@@ -362,6 +395,11 @@ public enum ModpackImporter {
         }
 
         try renameSimpleVersionFilesIfNeeded(in: versionDir, from: found.name, to: instanceId)
+        progress?(.init(packName: name, status: "正在补全游戏依赖", progress: 0.96, finishedFiles: files.count, totalFiles: files.count))
+        let instance = try validateInstance(at: versionDir, in: minecraftDirectory, requirement: nil)
+        try await MinecraftInstaller.complete(instance)
+        try validateInstance(at: versionDir, in: minecraftDirectory, requirement: nil)
+        installCompleted = true
         progress?(.init(packName: name, status: "导入完成", progress: 1, finishedFiles: files.count, totalFiles: files.count))
         return versionDir
     }
@@ -391,19 +429,134 @@ public enum ModpackImporter {
                     return normalized
                 }
             }()
-            let target = instanceDir.appending(path: relativePath)
+            let target = try safeDestination(relativePath: relativePath, under: instanceDir)
             try target.ensureParentDirectoryExists()
-            _ = try archive.extract(entry) { chunk in
-                if FileManager.default.fileExists(atPath: target.path) {
-                    let handle = try FileHandle(forWritingTo: target)
-                    try handle.seekToEnd()
-                    try handle.write(contentsOf: chunk)
-                    try handle.close()
-                } else {
-                    try chunk.write(to: target)
-                }
+            if FileManager.default.fileExists(atPath: target.path) {
+                try FileManager.default.removeItem(at: target)
             }
+            _ = try archive.extract(entry, to: target)
         }
+    }
+
+    private struct RuntimeRequirement {
+        let minecraftVersion: String
+        let loader: ClientBrand?
+        let loaderVersion: String?
+    }
+
+    private static func runtimeRequirement(
+        minecraftVersion: String?,
+        loaders: [(ClientBrand, String?)]
+    ) throws -> RuntimeRequirement {
+        let version = minecraftVersion?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !version.isEmpty else {
+            throw MyLocalizedError(reason: "整合包没有声明 Minecraft 游戏版本。")
+        }
+
+        let declared = loaders.compactMap { brand, version -> (ClientBrand, String)? in
+            guard let version = version?.trimmingCharacters(in: .whitespacesAndNewlines), !version.isEmpty else { return nil }
+            return (brand, version)
+        }
+        guard declared.count <= 1 else {
+            let names = declared.map { $0.0.getName() }.joined(separator: "、")
+            throw MyLocalizedError(reason: "整合包同时声明了多个加载器（\(names)），无法确定启动环境。")
+        }
+        return .init(
+            minecraftVersion: version,
+            loader: declared.first?.0,
+            loaderVersion: declared.first?.1
+        )
+    }
+
+    private static func installRuntime(
+        _ requirement: RuntimeRequirement,
+        name: String,
+        into minecraftDirectory: MinecraftDirectory
+    ) async throws {
+        _ = try await MinecraftInstaller.install(
+            MinecraftVersion(displayName: requirement.minecraftVersion),
+            name: name,
+            minecraftDirectory: minecraftDirectory,
+            loader: requirement.loader,
+            loaderVersion: requirement.loaderVersion
+        )
+    }
+
+    @discardableResult
+    private static func validateInstance(
+        at versionDirectory: URL,
+        in minecraftDirectory: MinecraftDirectory,
+        requirement: RuntimeRequirement?
+    ) throws -> MinecraftInstance {
+        let name = versionDirectory.lastPathComponent
+        let manifestURL = versionDirectory.appending(path: "\(name).json")
+        guard FileManager.default.fileExists(atPath: manifestURL.path) else {
+            throw MyLocalizedError(reason: "实例缺少客户端清单 \(name).json。")
+        }
+        guard FileManager.default.fileExists(atPath: versionDirectory.appending(path: "\(name).jar").path) else {
+            throw MyLocalizedError(reason: "实例缺少 Minecraft 客户端 \(name).jar。")
+        }
+
+        MinecraftInstance.clearCache(for: versionDirectory)
+        guard let instance = MinecraftInstance.create(minecraftDirectory, versionDirectory),
+              !instance.manifest.mainClass.isEmpty else {
+            throw MyLocalizedError(reason: "实例文件已生成，但启动清单无法加载。")
+        }
+        if let expectedLoader = requirement?.loader,
+           expectedLoader != .vanilla,
+           instance.clientBrand != expectedLoader {
+            throw MyLocalizedError(reason: "实例加载器校验失败：期望 \(expectedLoader.getName())，实际为 \(instance.clientBrand.getName())。")
+        }
+        return instance
+    }
+
+    private static func cleanupIncompleteInstance(at versionDirectory: URL) {
+        MinecraftInstance.clearCache(for: versionDirectory)
+        guard FileManager.default.fileExists(atPath: versionDirectory.path) else { return }
+        do {
+            try FileManager.default.removeItem(at: versionDirectory)
+            log("已清理导入失败的实例：\(versionDirectory.lastPathComponent)")
+        } catch {
+            err("无法清理导入失败的实例：\(error.localizedDescription)")
+        }
+    }
+
+    private static func safeDestination(relativePath: String, under root: URL) throws -> URL {
+        let normalized = normalizedArchivePath(relativePath)
+        guard !normalized.isEmpty,
+              !normalized.hasPrefix("/"),
+              !normalized.split(separator: "/", omittingEmptySubsequences: false).contains("..") else {
+            throw MyLocalizedError(reason: "整合包包含不安全路径：\(relativePath)")
+        }
+        let rootURL = root.standardizedFileURL
+        let destination = rootURL.appending(path: normalized).standardizedFileURL
+        guard destination.path == rootURL.path || destination.path.hasPrefix(rootURL.path + "/") else {
+            throw MyLocalizedError(reason: "整合包文件试图写入实例目录之外：\(relativePath)")
+        }
+        return destination
+    }
+
+    private static func minecraftVersion(from manifest: JSON) -> String {
+        let candidates = [
+            manifest["minecraft"]["version"].string,
+            manifest["gameVersion"].string,
+            manifest["minecraftVersion"].string,
+            manifest["minecraft"].string
+        ]
+        return candidates.compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }.first(where: { !$0.isEmpty }) ?? ""
+    }
+
+    private static func parseCurseForgeLoader(_ id: String) -> (ClientBrand, String?)? {
+        let lower = id.lowercased()
+        for (prefix, brand) in [
+            ("neoforge-", ClientBrand.neoforge),
+            ("forge-", ClientBrand.forge),
+            ("fabric-", ClientBrand.fabric),
+            ("quilt-", ClientBrand.quilt)
+        ] where lower.hasPrefix(prefix) {
+            return (brand, String(id.dropFirst(prefix.count)))
+        }
+        return nil
     }
 
     private static func buildInheritsVersionJSON(inheritsFrom: String, versionId: String, loaders: [String]) throws -> Data {

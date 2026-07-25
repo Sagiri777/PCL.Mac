@@ -8,7 +8,7 @@
 
 ## 当前版本
 
-- Release: `v0.1.0`
+- Release: `v1.0.0`
 - 系统要求: macOS 14.0+
 - 构建产物: ad-hoc 签名的 `.app` 压缩包
 

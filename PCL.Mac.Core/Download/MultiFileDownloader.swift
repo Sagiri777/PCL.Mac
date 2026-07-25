@@ -50,6 +50,11 @@ public struct DownloadItem {
 }
 
 public class MultiFileDownloader {
+    /// A high number of simultaneous URLSession tasks hurts both mirror servers and
+    /// local disk I/O.  Keep the batch bounded even when a caller requests a much
+    /// larger value (the asset installer used to request 256 connections).
+    public static let maximumConcurrentDownloads = 16
+
     private let task: InstallTask?
     private let items: [DownloadItem]
     private let concurrentLimit: Int
@@ -58,8 +63,7 @@ public class MultiFileDownloader {
     private let progress: ((Double, Int) -> Void)?
     private let total: Int
     private let maxRetryCount: Int = 3
-    private var totalProgress: Double = 0
-    private var finishedCount: Int = 0
+    private let progressState = DownloadBatchProgress()
     
     public convenience init(
         task: InstallTask? = nil,
@@ -90,7 +94,7 @@ public class MultiFileDownloader {
     ) {
         self.task = task
         self.items = items
-        self.concurrentLimit = concurrentLimit
+        self.concurrentLimit = min(max(1, concurrentLimit), Self.maximumConcurrentDownloads)
         self.replaceMethod = replaceMethod
         self.networkCategory = networkCategory
         self.progress = progress
@@ -99,6 +103,7 @@ public class MultiFileDownloader {
     
     public func start() async throws {
         guard !items.isEmpty else { return }
+        await progressState.reset()
         if concurrentLimit == 1 {
             for item in items {
                 try await attemptDownload(item)
@@ -112,9 +117,10 @@ public class MultiFileDownloader {
                 while !Task.isCancelled {
                     try? await Task.sleep(for: .seconds(0.1))
                     if Task.isCancelled { break }
+                    let snapshot = await self.progressState.snapshot()
                     await MainActor.run {
-                        progress?(self.totalProgress / Double(self.total), self.finishedCount)
-                        task?.currentStagePercentage = self.totalProgress / Double(self.total)
+                        progress?(snapshot.progress, snapshot.finishedCount)
+                        task?.currentStagePercentage = snapshot.progress
                     }
                 }
             }
@@ -147,9 +153,10 @@ public class MultiFileDownloader {
             }
         }
         
+        let snapshot = await progressState.snapshot()
         await MainActor.run {
-            progress?(self.totalProgress / Double(self.total), self.finishedCount)
-            task?.currentStagePercentage = self.totalProgress / Double(self.total)
+            progress?(snapshot.progress, snapshot.finishedCount)
+            task?.currentStagePercentage = snapshot.progress
         }
     }
     
@@ -158,8 +165,7 @@ public class MultiFileDownloader {
             throw MyLocalizedError(reason: "\(item.destination.lastPathComponent) 已存在。")
         }
         if replaceMethod == .skip && item.destinationIsValid() {
-            finishedCount += 1
-            totalProgress += 1
+            await progressState.complete()
             await MainActor.run {
                 task?.completeOneFile()
             }
@@ -167,14 +173,15 @@ public class MultiFileDownloader {
         }
         
         var lastError: Error?
-        var lastProgress: Double = 0
         for candidate in item.candidates {
             for retryIndex in 0...maxRetryCount {
+                let progressID = UUID()
                 do {
                     try await SingleFileDownloader.download(url: candidate, destination: item.destination, replaceMethod: .replace, networkCategory: networkCategory) { progress in
-                        let normalizedProgress = progress < 0 ? lastProgress : progress
-                        self.totalProgress += (normalizedProgress - lastProgress)
-                        lastProgress = normalizedProgress
+                        guard progress >= 0 else { return }
+                        Task {
+                            await self.progressState.update(id: progressID, value: progress)
+                        }
                     }
                     if let sha1 = item.sha1, !sha1.isEmpty {
                         let actual = try Util.sha1OfFile(url: item.destination)
@@ -183,16 +190,18 @@ public class MultiFileDownloader {
                             throw MyLocalizedError(reason: "\(item.destination.lastPathComponent) 校验失败。")
                         }
                     }
-                    finishedCount += 1
+                    await progressState.complete(id: progressID)
                     await MainActor.run {
                         task?.completeOneFile()
                     }
                     return
                 } catch {
+                    if Task.isCancelled || isCancellation(error) {
+                        throw CancellationError()
+                    }
                     lastError = error
                     try? FileManager.default.removeItem(at: item.destination)
-                    totalProgress -= lastProgress
-                    lastProgress = 0
+                    await progressState.remove(id: progressID)
                     if retryIndex < maxRetryCount {
                         warn("下载 \(candidate.lastPathComponent) 失败：\(error.localizedDescription)，重试 \(retryIndex + 1)/\(maxRetryCount)")
                         try await Task.sleep(for: .seconds(Double(retryIndex + 1) * 0.5))
@@ -204,6 +213,51 @@ public class MultiFileDownloader {
         }
 
         throw lastError ?? MyLocalizedError(reason: "\(item.destination.lastPathComponent) 下载失败。")
+    }
+
+    private func isCancellation(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        if let urlError = error as? URLError, urlError.code == .cancelled { return true }
+        return false
+    }
+}
+
+/// Serializes aggregate progress updates from URLSession delegate queues.  The
+/// downloader used to mutate two shared properties from several task-group
+/// children, which produced inaccurate progress and occasional UI regressions.
+private actor DownloadBatchProgress {
+    private var itemProgress: [UUID: Double] = [:]
+    private var closedItems: Set<UUID> = []
+    private var finishedCount = 0
+
+    func reset() {
+        itemProgress.removeAll(keepingCapacity: true)
+        closedItems.removeAll(keepingCapacity: true)
+        finishedCount = 0
+    }
+
+    func update(id: UUID, value: Double) {
+        guard !closedItems.contains(id) else { return }
+        itemProgress[id] = min(max(value, 0), 1)
+    }
+
+    func remove(id: UUID) {
+        closedItems.insert(id)
+        itemProgress.removeValue(forKey: id)
+    }
+
+    func complete(id: UUID? = nil) {
+        if let id {
+            closedItems.insert(id)
+            itemProgress.removeValue(forKey: id)
+        }
+        finishedCount += 1
+    }
+
+    func snapshot() -> (progress: Double, finishedCount: Int) {
+        let completed = Double(finishedCount)
+        let inFlight = itemProgress.values.reduce(0, +)
+        return (completed + inFlight, finishedCount)
     }
 }
 

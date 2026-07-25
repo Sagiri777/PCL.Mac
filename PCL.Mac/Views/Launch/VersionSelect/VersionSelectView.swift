@@ -69,6 +69,10 @@ struct VersionSelectView: View, SubRouteContainer {
                                 hint("添加成功", .finish)
                             }
                         }
+                    LeftTabItem(image: Image(systemName: "shippingbox.and.arrow.backward"), text: "一键导入整合包")
+                        .onTapGesture {
+                            selectAndImportModpack()
+                        }
                     Spacer()
                 }
             }
@@ -107,6 +111,40 @@ struct VersionSelectView: View, SubRouteContainer {
             )
         }
         return AnyView(EmptyView())
+    }
+
+    private func selectAndImportModpack() {
+        guard let directory = settings.currentMinecraftDirectory else {
+            hint("请先选择 Minecraft 文件夹！", .critical)
+            return
+        }
+
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowedContentTypes = [.zip, UTType(filenameExtension: "mrpack")!]
+        panel.prompt = "导入"
+
+        guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
+        let urls = panel.urls
+        Task {
+            hint("正在导入 \(urls.count) 个整合包……")
+            var lastImportedURL: URL?
+            do {
+                for url in urls {
+                    lastImportedURL = try await ModpackImporter.install(zipURL: url, into: directory)
+                }
+                if let lastImportedURL {
+                    settings.defaultInstance = lastImportedURL.lastPathComponent
+                }
+                directory.loadInnerInstances()
+                hint("整合包导入完成，可直接启动！", .finish)
+            } catch {
+                err("整合包导入失败：\(error.localizedDescription)")
+                hint("整合包导入失败：\(error.localizedDescription)", .critical)
+            }
+        }
     }
 }
 

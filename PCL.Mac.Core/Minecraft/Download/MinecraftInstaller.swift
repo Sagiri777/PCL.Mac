@@ -32,6 +32,104 @@ import SwiftyJSON
 
 public class MinecraftInstaller {
     private init() {}
+
+    /// Installs a complete, launchable Minecraft instance and optionally applies
+    /// the exact mod-loader version declared by a modpack.
+    ///
+    /// Unlike `createTask`, this entry point propagates every error to its caller,
+    /// which lets modpack import roll back a half-created instance atomically.
+    @discardableResult
+    public static func install(
+        _ minecraftVersion: MinecraftVersion,
+        name: String,
+        minecraftDirectory: MinecraftDirectory,
+        loader: ClientBrand? = nil,
+        loaderVersion: String? = nil
+    ) async throws -> MinecraftInstance {
+        let task = MinecraftInstallTask(
+            minecraftVersion: minecraftVersion,
+            minecraftDirectory: minecraftDirectory,
+            name: name
+        ) { _ in }
+
+        try await downloadClientManifest(task)
+        try await downloadAssetIndex(task)
+        updateProgress(task)
+        try await downloadClientJar(task)
+
+        if let loader {
+            guard let loaderVersion, !loaderVersion.isEmpty else {
+                throw MyLocalizedError(reason: "整合包没有提供 \(loader.getName()) 版本。")
+            }
+            switch loader {
+            case .fabric:
+                try await FabricInstaller.installFabric(
+                    version: minecraftVersion,
+                    minecraftDirectory: minecraftDirectory,
+                    runningDirectory: task.versionURL,
+                    loaderVersion
+                )
+            case .forge:
+                try await ForgeInstaller(minecraftDirectory, task.versionURL, task.manifest!).install(
+                    minecraftVersion: minecraftVersion,
+                    forgeVersion: loaderVersion
+                )
+            case .neoforge:
+                try await NeoforgeInstaller(minecraftDirectory, task.versionURL, task.manifest!).install(
+                    minecraftVersion: minecraftVersion,
+                    forgeVersion: loaderVersion
+                )
+            case .vanilla:
+                break
+            default:
+                throw MyLocalizedError(reason: "暂不支持自动安装 \(loader.getName())。")
+            }
+
+            // Loader installers replace the version JSON.  Reparse it before
+            // downloading libraries, otherwise only vanilla dependencies are
+            // installed and the generated instance cannot launch.
+            let manifestURL = task.versionURL.appending(path: "\(name).json")
+            task.manifest = try ClientManifest.parse(url: manifestURL, minecraftDirectory: minecraftDirectory)
+            guard task.manifest != nil else {
+                throw MyLocalizedError(reason: "无法解析安装后的 \(loader.getName()) 客户端清单。")
+            }
+        }
+
+        modifyId(task)
+        try await downloadHashResourcesFiles(task)
+        try await downloadLibraries(task)
+        try await downloadNatives(task)
+        try unzipNatives(task)
+        finalWork(task)
+
+        MinecraftInstance.clearCache(for: task.versionURL)
+        guard let instance = MinecraftInstance.create(minecraftDirectory, task.versionURL) else {
+            throw MyLocalizedError(reason: "Minecraft 安装完成，但生成的实例无法加载。")
+        }
+        return instance
+    }
+
+    /// Downloads and validates all shared assets, libraries and natives required
+    /// by an already imported instance.
+    public static func complete(_ instance: MinecraftInstance) async throws {
+        let architecture: Architecture = Architecture.system == .x64
+            ? .x64
+            : (instance.isUsingRosetta ? .x64 : .arm64)
+        let task = MinecraftInstallTask(
+            minecraftVersion: instance.version,
+            minecraftDirectory: instance.minecraftDirectory,
+            name: instance.name,
+            architecture: architecture
+        ) { _ in }
+        task.manifest = instance.manifest
+        try await downloadAssetIndex(task)
+        try await downloadClientJar(task)
+        try await downloadHashResourcesFiles(task)
+        try await downloadLibraries(task)
+        try await downloadNatives(task)
+        try unzipNatives(task)
+        finalWork(task)
+    }
     
     // MARK: 下载客户端清单
     private static func downloadClientManifest(_ task: MinecraftInstallTask) async throws {
@@ -97,7 +195,9 @@ public class MinecraftInstaller {
             destinations.append(object.appendTo(task.minecraftDirectory.assetsURL.appending(path: "objects")))
         }
         
-        try await MultiFileDownloader(task: task, urls: urls, destinations: destinations, concurrentLimit: 256).start()
+        // MultiFileDownloader caps and serializes this batch.  A modest limit
+        // avoids exhausting file descriptors on large asset indexes.
+        try await MultiFileDownloader(task: task, urls: urls, destinations: destinations, concurrentLimit: MultiFileDownloader.maximumConcurrentDownloads).start()
     }
     
     // MARK: 下载依赖项
@@ -289,6 +389,14 @@ public class MinecraftInstaller {
                 await forgeTask.install(task)
             } else if let neoforgeTask = DataManager.shared.inprogressInstallTasks?.tasks["neoforge"] as? NeoforgeInstallTask {
                 await neoforgeTask.install(task)
+            }
+
+            // Forge/NeoForge 会替换客户端清单；必须重新解析后再下载依赖。
+            // FabricInstallTask 已经做了这一步，重复解析不会改变结果。
+            let manifestURL = task.versionURL.appending(path: "\(task.name).json")
+            task.manifest = try ClientManifest.parse(url: manifestURL, minecraftDirectory: task.minecraftDirectory)
+            guard task.manifest != nil else {
+                throw MyLocalizedError(reason: "无法解析 Mod Loader 客户端清单。")
             }
             
             modifyId(task)

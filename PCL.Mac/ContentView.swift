@@ -139,6 +139,7 @@ struct ContentView: View {
         }
 
         var importedPacks = 0
+        var lastImportedPack: URL?
         var installedMods = 0
         var failed = 0
 
@@ -150,7 +151,7 @@ struct ContentView: View {
             hint("正在导入 \(classification.modpacks.count) 个整合包……")
             for packURL in classification.modpacks {
                 do {
-                    _ = try await ModpackImporter.install(zipURL: packURL, into: directory)
+                    lastImportedPack = try await ModpackImporter.install(zipURL: packURL, into: directory)
                     importedPacks += 1
                 } catch {
                     failed += 1
@@ -158,6 +159,9 @@ struct ContentView: View {
                 }
             }
             if importedPacks > 0 {
+                if let lastImportedPack {
+                    AppSettings.shared.defaultInstance = lastImportedPack.lastPathComponent
+                }
                 directory.loadInnerInstances()
             }
         }
