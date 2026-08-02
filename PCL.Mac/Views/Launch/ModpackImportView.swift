@@ -5,6 +5,7 @@
 
 import SwiftUI
 import UniformTypeIdentifiers
+import AppKit
 
 @MainActor
 final class ModpackImportManager: ObservableObject {
@@ -32,8 +33,13 @@ final class ModpackImportManager: ObservableObject {
     @Published private(set) var finishedFiles = 0
     @Published private(set) var totalFiles = 0
     @Published private(set) var importedURLs: [URL] = []
+    @Published private(set) var compatibilityDisabledCount = 0
+    @Published private(set) var compatibilityOfficialArtifactCount = 0
+    @Published private(set) var compatibilityWarningCount = 0
+    @Published private(set) var recoveryInfo: ModpackImportRecoveryInfo?
 
     private var worker: Task<Void, Never>?
+    private var completedImports: [URL: URL] = [:]
 
     var canEditSelection: Bool {
         if case .ready = phase { return true }
@@ -88,12 +94,20 @@ final class ModpackImportManager: ObservableObject {
     func start() {
         guard !urls.isEmpty, let directory, !isRunning else { return }
         phase = .importing
-        importedURLs = []
+        recoveryInfo = nil
         worker = Task { [weak self] in
             guard let self else { return }
+            var activeURL: URL?
             do {
                 for (index, url) in urls.enumerated() {
                     try Task.checkCancellation()
+                    let sourceKey = url.standardizedFileURL
+                    if completedImports[sourceKey] != nil {
+                        currentPackIndex = index
+                        overallProgress = Double(index + 1) / Double(max(urls.count, 1))
+                        continue
+                    }
+                    activeURL = url
                     currentPackIndex = index
                     currentPackName = url.deletingPathExtension().lastPathComponent
                     statusText = "正在读取整合包"
@@ -107,7 +121,13 @@ final class ModpackImportManager: ObservableObject {
                             self?.consume(update)
                         }
                     }
-                    importedURLs.append(importedURL)
+                    completedImports[sourceKey] = importedURL
+                    importedURLs = urls.compactMap { self.completedImports[$0.standardizedFileURL] }
+                    if let report = await NativeCompatibilityService.shared.lastReport(instanceURL: importedURL) {
+                        compatibilityDisabledCount += report.disabledCount
+                        compatibilityOfficialArtifactCount += report.installedOfficialArtifactCount
+                        compatibilityWarningCount += report.unresolvedCount
+                    }
                 }
 
                 stageProgress = Dictionary(uniqueKeysWithValues: ModpackImportStage.allCases.map { ($0, 1) })
@@ -123,8 +143,18 @@ final class ModpackImportManager: ObservableObject {
                     statusText = "已取消导入，未完成的实例已清理"
                     phase = .cancelled
                 } else {
-                    statusText = "导入在 \(currentStage.title) 阶段停止"
-                    phase = .failed(error.localizedDescription)
+                    if let failure = error as? ModpackImportFailure {
+                        currentStage = failure.stage
+                        finishedFiles = failure.completedFiles
+                        totalFiles = failure.totalFiles
+                    }
+                    if let activeURL {
+                        recoveryInfo = ModpackImporter.recoveryInfo(for: activeURL, in: directory)
+                    }
+                    statusText = recoveryInfo == nil
+                        ? "导入在 \(currentStage.title) 阶段停止"
+                        : "下载已暂停，现有文件和检查点均已保留"
+                    phase = .failed((error as? ModpackImportFailure)?.reason ?? error.localizedDescription)
                     err("整合包导入失败：\(error.localizedDescription)")
                 }
                 if let last = importedURLs.last {
@@ -150,8 +180,17 @@ final class ModpackImportManager: ObservableObject {
 
     func retry() {
         guard !isRunning else { return }
-        resetProgress()
+        resetProgress(preservingCompletedImports: true)
         start()
+    }
+
+    func revealRecoveryLocation() {
+        guard let recoveryInfo else { return }
+        if let manualDownloadListURL = recoveryInfo.manualDownloadListURL {
+            NSWorkspace.shared.open(manualDownloadListURL)
+        } else {
+            NSWorkspace.shared.activateFileViewerSelecting([recoveryInfo.instanceURL])
+        }
     }
 
     private func consume(_ update: ModpackImportProgressUpdate) {
@@ -169,16 +208,24 @@ final class ModpackImportManager: ObservableObject {
         overallProgress = (Double(currentPackIndex) + update.progress) / Double(max(urls.count, 1))
     }
 
-    private func resetProgress() {
-        currentPackName = urls.first?.deletingPathExtension().lastPathComponent ?? ""
+    private func resetProgress(preservingCompletedImports: Bool = false) {
+        if !preservingCompletedImports {
+            completedImports = [:]
+            importedURLs = []
+            compatibilityDisabledCount = 0
+            compatibilityOfficialArtifactCount = 0
+            compatibilityWarningCount = 0
+        }
+        let firstPending = urls.first { completedImports[$0.standardizedFileURL] == nil }
+        currentPackName = (firstPending ?? urls.first)?.deletingPathExtension().lastPathComponent ?? ""
         statusText = "检查文件后开始导入"
-        currentPackIndex = 0
-        overallProgress = 0
+        currentPackIndex = firstPending.flatMap { urls.firstIndex(of: $0) } ?? 0
+        overallProgress = Double(completedImports.count) / Double(max(urls.count, 1))
         currentStage = .detecting
         stageProgress = [:]
         finishedFiles = 0
         totalFiles = 0
-        importedURLs = []
+        recoveryInfo = nil
     }
 
     private func uniqueModpackURLs(_ input: [URL]) -> [URL] {
@@ -392,6 +439,12 @@ struct ModpackImportView: View {
                 }
                 .background(Color("TextColor").opacity(0.025), in: RoundedRectangle(cornerRadius: 6))
 
+                if manager.compatibilityDisabledCount > 0
+                    || manager.compatibilityOfficialArtifactCount > 0
+                    || manager.compatibilityWarningCount > 0 {
+                    compatibilitySummary
+                }
+
                 if case .failed(let message) = manager.phase {
                     failureMessage(message)
                 }
@@ -399,6 +452,26 @@ struct ModpackImportView: View {
             .padding(20)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var compatibilitySummary: some View {
+        HStack(alignment: .top, spacing: 11) {
+            Image(systemName: "shield.lefthalf.filled")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(settings.theme.getTextStyle())
+                .frame(width: 26)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Mac 兼容处理")
+                    .font(.custom("PCL English", size: 13))
+                    .foregroundStyle(Color("TextColor"))
+                Text("已可逆隔离 \(manager.compatibilityDisabledCount) 个 Windows-only Mod；补全 \(manager.compatibilityOfficialArtifactCount) 个官方 Mac 组件；\(manager.compatibilityWarningCount) 个项目需要启动前确认。")
+                    .font(.custom("PCL English", size: 12))
+                    .foregroundStyle(Color(hex: 0x7F8790))
+            }
+            Spacer()
+        }
+        .padding(12)
+        .background(settings.theme.getAccentColor().opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
     }
 
     private func stageRow(_ stage: ModpackImportStage) -> some View {
@@ -436,10 +509,30 @@ struct ModpackImportView: View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(Color(hex: 0xE5484D))
-            Text(message)
-                .font(.custom("PCL English", size: 12))
-                .foregroundStyle(Color("TextColor"))
-                .textSelection(.enabled)
+            VStack(alignment: .leading, spacing: 8) {
+                Text("失败原因")
+                    .font(.custom("PCL English", size: 13))
+                    .foregroundStyle(Color("TextColor"))
+                Text(message)
+                    .font(.custom("PCL English", size: 12))
+                    .foregroundStyle(Color("TextColor"))
+                    .textSelection(.enabled)
+                if let recoveryInfo = manager.recoveryInfo {
+                    Text(recoveryInfo.summary)
+                        .font(.custom("PCL English", size: 12))
+                        .foregroundStyle(Color(hex: 0x7F8790))
+                    if recoveryInfo.manualDownloadListURL != nil {
+                        Text("作者限制下载的文件已写入人工下载清单；放到清单标注的位置后点击继续重试。")
+                            .font(.custom("PCL English", size: 11))
+                            .foregroundStyle(Color(hex: 0x7F8790))
+                    }
+                    Button(recoveryInfo.manualDownloadListURL == nil ? "在 Finder 中显示续传目录" : "打开人工下载清单") {
+                        manager.revealRecoveryLocation()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            }
             Spacer()
         }
         .padding(12)
@@ -473,7 +566,7 @@ struct ModpackImportView: View {
                     .font(.custom("PCL English", size: 12))
                 Spacer()
             case .success:
-                Label("已创建 \(manager.importedURLs.count) 个可启动实例", systemImage: "checkmark.circle.fill")
+                Label(successFooterText, systemImage: "checkmark.circle.fill")
                     .font(.custom("PCL English", size: 12))
                     .foregroundStyle(settings.theme.getTextStyle())
                 Spacer()
@@ -483,7 +576,7 @@ struct ModpackImportView: View {
                 Spacer()
                 Button("关闭") { manager.close() }
                     .buttonStyle(.bordered)
-                Button("重试") { manager.retry() }
+                Button(manager.recoveryInfo == nil ? "重试" : "继续重试") { manager.retry() }
                     .buttonStyle(.borderedProminent)
             case .cancelled:
                 Text("导入已取消")
@@ -498,12 +591,19 @@ struct ModpackImportView: View {
         .frame(height: 66)
     }
 
+    private var successFooterText: String {
+        if manager.compatibilityDisabledCount > 0 || manager.compatibilityOfficialArtifactCount > 0 {
+            return "已创建 \(manager.importedURLs.count) 个实例，隔离 \(manager.compatibilityDisabledCount) 个 Mod，补全 \(manager.compatibilityOfficialArtifactCount) 个官方组件"
+        }
+        return "已创建 \(manager.importedURLs.count) 个可启动实例"
+    }
+
     private var headerSubtitle: String {
         switch manager.phase {
         case .ready: "确认文件与实例位置"
         case .importing, .cancelling: "自动安装游戏、加载器与全部依赖"
-        case .success: "实例已经通过启动环境校验"
-        case .failed: "查看失败阶段并重试"
+        case .success: "实例已通过启动环境与 Mac 原生兼容检查"
+        case .failed: "查看失败原因、续传状态并继续重试"
         case .cancelled: "未完成的实例已移除"
         }
     }

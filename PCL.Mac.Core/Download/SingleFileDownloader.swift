@@ -28,6 +28,7 @@ public enum SingleFileDownloader {
         progress: ((Double) -> Void)? = nil
     ) async throws {
         if FileManager.default.fileExists(atPath: destination.path) && replaceMethod == .skip {
+            discardResumeData(for: destination)
             task?.completeOneFile()
             progress?(1)
             return
@@ -65,6 +66,53 @@ public enum SingleFileDownloader {
         task?.completeOneFile()
         progress?(1.0)
     }
+
+    /// URLSession's opaque resume payload is kept next to the target. Completed
+    /// files are still the primary cache; this additionally avoids restarting a
+    /// single large file after a transient disconnect.
+    public static func resumeDataURL(for destination: URL) -> URL {
+        destination.deletingLastPathComponent()
+            .appending(path: ".\(destination.lastPathComponent).pclresume")
+    }
+
+    public static func discardResumeData(for destination: URL) {
+        try? FileManager.default.removeItem(at: resumeDataURL(for: destination))
+        try? FileManager.default.removeItem(at: resumeSourceURL(for: destination))
+    }
+
+    private static func resumeSourceURL(for destination: URL) -> URL {
+        destination.deletingLastPathComponent()
+            .appending(path: ".\(destination.lastPathComponent).pclresume.source")
+    }
+
+    static func loadResumeData(for destination: URL, sourceURL: URL) -> Data? {
+        let sourceMarker = resumeSourceURL(for: destination)
+        guard let savedSource = try? String(contentsOf: sourceMarker, encoding: .utf8),
+              savedSource == sourceURL.absoluteString,
+              let data = try? Data(contentsOf: resumeDataURL(for: destination)),
+              !data.isEmpty else {
+            discardResumeData(for: destination)
+            return nil
+        }
+        return data
+    }
+
+    static func persistResumeData(_ data: Data, for destination: URL, sourceURL: URL) {
+        guard !data.isEmpty else { return }
+        do {
+            try FileManager.default.createDirectory(
+                at: destination.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try Data(sourceURL.absoluteString.utf8).write(
+                to: resumeSourceURL(for: destination),
+                options: .atomic
+            )
+            try data.write(to: resumeDataURL(for: destination), options: .atomic)
+        } catch {
+            discardResumeData(for: destination)
+        }
+    }
 }
 
 private final class SharedDownloadDelegate: NSObject, URLSessionDownloadDelegate {
@@ -80,21 +128,28 @@ private final class SharedDownloadDelegate: NSObject, URLSessionDownloadDelegate
         let taskID: Int
     }
 
-    private final class Context {
+    private final class Context: @unchecked Sendable {
+        let sourceURL: URL
         let destination: URL
         let replaceMethod: ReplaceMethod
         weak var installTask: InstallTask?
         let progress: ((Double) -> Void)?
         var continuation: CheckedContinuation<Void, Error>?
         var lastWritten: Int64 = 0
+        /// 上次向主线程报告进度的时间。didWriteData 每个 chunk 都会回调，
+        /// 逐次 hop 到 MainActor 会在大批量下载时把主线程打满。
+        var lastReportedAt: TimeInterval = 0
+        var lastReportedValue: Double = -1
 
         init(
+            sourceURL: URL,
             destination: URL,
             replaceMethod: ReplaceMethod,
             installTask: InstallTask?,
             progress: ((Double) -> Void)?,
             continuation: CheckedContinuation<Void, Error>
         ) {
+            self.sourceURL = sourceURL
             self.destination = destination
             self.replaceMethod = replaceMethod
             self.installTask = installTask
@@ -113,24 +168,32 @@ private final class SharedDownloadDelegate: NSObject, URLSessionDownloadDelegate
         task: InstallTask?,
         progress: ((Double) -> Void)?
     ) async throws {
-        let downloadTask = session.downloadTask(with: request)
+        let sourceURL = request.url ?? destination
+        let savedResumeData = SingleFileDownloader.loadResumeData(for: destination, sourceURL: sourceURL)
+        let downloadTask = savedResumeData.map { session.downloadTask(withResumeData: $0) }
+            ?? session.downloadTask(with: request)
         let key = TaskKey(sessionID: ObjectIdentifier(session), taskID: downloadTask.taskIdentifier)
 
         try await withTaskCancellationHandler(operation: {
             try await withCheckedThrowingContinuation { continuation in
+                let context = Context(
+                    sourceURL: sourceURL,
+                    destination: destination,
+                    replaceMethod: replaceMethod,
+                    installTask: task,
+                    progress: progress,
+                    continuation: continuation
+                )
                 Self.queue.addOperation {
-                    self.contexts[key] = Context(
-                        destination: destination,
-                        replaceMethod: replaceMethod,
-                        installTask: task,
-                        progress: progress,
-                        continuation: continuation
-                    )
+                    self.contexts[key] = context
                     downloadTask.resume()
                 }
             }
         }, onCancel: {
-            downloadTask.cancel()
+            downloadTask.cancel(byProducingResumeData: { data in
+                guard let data else { return }
+                SingleFileDownloader.persistResumeData(data, for: destination, sourceURL: sourceURL)
+            })
         })
     }
 
@@ -144,7 +207,8 @@ private final class SharedDownloadDelegate: NSObject, URLSessionDownloadDelegate
         guard let context = context(for: session, task: downloadTask) else { return }
         let delta = totalBytesWritten - context.lastWritten
         context.lastWritten = totalBytesWritten
-        Task { await SpeedMeter.shared.addBytes(Int(delta)) }
+        // 字节计数走非阻塞的同步累加器，不再为每个 chunk 起一个 Task 跳到 MainActor。
+        SpeedMeter.record(bytes: Int(delta))
 
         guard totalBytesExpectedToWrite > 0 else {
             context.progress?(-1)
@@ -164,7 +228,12 @@ private final class SharedDownloadDelegate: NSObject, URLSessionDownloadDelegate
                 throw MyLocalizedError(reason: "远程服务器未返回有效响应。")
             }
             guard (200..<300).contains(response.statusCode) else {
-                throw MyLocalizedError(reason: "远程服务器返回了 \(response.statusCode)。")
+                let host = response.url?.host ?? context.sourceURL.host ?? "远程服务器"
+                let challenged = response.value(forHTTPHeaderField: "cf-mitigated") == "challenge"
+                if response.statusCode == 403, challenged {
+                    throw MyLocalizedError(reason: "\(host) 返回 HTTP 403，Cloudflare 拒绝了启动器请求。")
+                }
+                throw MyLocalizedError(reason: "\(host) 返回 HTTP \(response.statusCode)。")
             }
 
             let manager = FileManager.default
@@ -182,6 +251,7 @@ private final class SharedDownloadDelegate: NSObject, URLSessionDownloadDelegate
             if context.replaceMethod != .skip || !manager.fileExists(atPath: context.destination.path) {
                 try manager.moveItem(at: location, to: context.destination)
             }
+            SingleFileDownloader.discardResumeData(for: context.destination)
             updateProgress(context, value: 1)
             resume(session: session, task: downloadTask, with: .success(()))
         } catch {
@@ -201,6 +271,22 @@ private final class SharedDownloadDelegate: NSObject, URLSessionDownloadDelegate
             )
             return
         }
+        if let context = context(for: session, task: task) {
+            let nsError = error as NSError
+            if let resumeData = nsError.userInfo["NSURLSessionDownloadTaskResumeData"] as? Data,
+               !resumeData.isEmpty {
+                SingleFileDownloader.persistResumeData(
+                    resumeData,
+                    for: context.destination,
+                    sourceURL: context.sourceURL
+                )
+            } else if (error as? URLError)?.code != .cancelled {
+                // No replacement resume payload means the saved opaque blob is
+                // no longer usable. Keep it only for an explicit cancellation,
+                // whose cancellation handler may be writing fresh resume data.
+                SingleFileDownloader.discardResumeData(for: context.destination)
+            }
+        }
         resume(session: session, task: task, with: .failure(error))
     }
 
@@ -219,7 +305,18 @@ private final class SharedDownloadDelegate: NSObject, URLSessionDownloadDelegate
         continuation.resume(with: result)
     }
 
+    /// 节流后再上报进度：同一个下载最多每 100ms 更新一次 UI，进度到 1 时必报。
+    /// delegate 回调本身跑在串行的 delegate queue 上，所以这里读写 context 是安全的。
     private func updateProgress(_ context: Context, value: Double) {
+        let now = Date().timeIntervalSince1970
+        let isTerminal = value >= 1
+        if !isTerminal {
+            guard now - context.lastReportedAt >= 0.1,
+                  abs(value - context.lastReportedValue) >= 0.005 else { return }
+        }
+        context.lastReportedAt = now
+        context.lastReportedValue = value
+
         Task { @MainActor in
             context.installTask?.currentStagePercentage = value
             context.progress?(value)

@@ -86,23 +86,33 @@ public class MinecraftDirectory: Codable, Identifiable, Hashable {
                 let instanceDirectories = contents.filter { url in
                     (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
                     && fm.fileExists(atPath: url.appending(path: "\(url.lastPathComponent).json").path)
+                    // A recoverable modpack import may already contain a valid
+                    // runtime JSON, but it is not a launchable instance until
+                    // all declared files and overrides are present.
+                    && !fm.fileExists(atPath: url.appending(path: ".PCL_Mac_import.json").path)
                 }
+                // 先在后台把所有实例解析完，再一次性推给 UI。
+                // 原来每个实例一次 MainActor.run，N 个实例就是 N 次跳转 +
+                // N 次全界面失效（instances 变化会经 objectWillChange 传播）。
+                var loaded: [InstanceInfo] = []
+                loaded.reserveCapacity(instanceDirectories.count)
                 for instanceDirectory in instanceDirectories {
                     if let instance = MinecraftInstance.create(self, instanceDirectory) {
-                        let info = InstanceInfo(
-                            minecraftDirectory: self,
-                            icon: instance.getIconName(),
-                            name: instance.name,
-                            version: instance.version,
-                            runningDirectory: instanceDirectory,
-                            brand: instance.clientBrand
+                        loaded.append(
+                            InstanceInfo(
+                                minecraftDirectory: self,
+                                icon: instance.getIconName(),
+                                name: instance.name,
+                                version: instance.version,
+                                runningDirectory: instanceDirectory,
+                                brand: instance.clientBrand
+                            )
                         )
-                        await MainActor.run {
-                            self.instances.append(info)
-                        }
                     }
                 }
+
                 await MainActor.run {
+                    self.instances = loaded
                     self.isLoading = false
                     DataManager.shared.objectWillChange.send()
                     callback?(self.instances)
@@ -124,7 +134,9 @@ public class MinecraftDirectory: Codable, Identifiable, Hashable {
 }
 
 public struct InstanceInfo: Identifiable, Hashable {
-    public let id: UUID = .init()
+    /// 用实例目录做标识，而不是每次 init 生成新的 UUID。
+    /// 后者会让列表每次重新加载都产生全新的 ForEach 身份，导致整段列表重建 + 重播入场动画。
+    public var id: URL { runningDirectory }
     public let minecraftDirectory: MinecraftDirectory
     public let icon: String
     public let name: String
