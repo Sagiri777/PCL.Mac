@@ -63,11 +63,43 @@ public class Theme: Codable, Hashable, Equatable {
         return accentColor
     }
     
+    /// 已解析主题缓存。key 为 "id@浅/深"：`ThemeParser.parseColor` 会读
+    /// `ColorConstants.isLight`，同一主题在两种外观下解析结果不同。
+    ///
+    /// `load` 要读文件、解 JSON、把 base64 图片解成 NSImage。它在启动、
+    /// `themeId.didSet`、`updateColorScheme` 和 `Theme.init(from:)` 里都会被调用，
+    /// 重复做整套解码没有意义。
+    private static var cache: [String: Theme] = [:]
+    private static let cacheLock = NSLock()
+
     public static func load(id: String) -> Theme {
+        let cacheKey = "\(id)@\(ColorConstants.isLight ? "light" : "dark")"
+
+        cacheLock.lock()
+        let cached = cache[cacheKey]
+        cacheLock.unlock()
+        if let cached { return cached }
+
+        let theme = parse(id: id)
+
+        cacheLock.lock()
+        cache[cacheKey] = theme
+        cacheLock.unlock()
+        return theme
+    }
+
+    /// 丢弃主题缓存。用户往 Themes 目录放了新文件后调用。
+    public static func invalidateCache() {
+        cacheLock.lock()
+        cache.removeAll()
+        cacheLock.unlock()
+    }
+
+    private static func parse(id: String) -> Theme {
         do {
             let internalURL: URL = SharedConstants.shared.applicationResourcesURL.appending(path: "\(id).json")
             let externalURL: URL = SharedConstants.shared.applicationSupportURL.appending(path: "Themes").appending(path: "\(id).json")
-            
+
             let data = try FileHandle(forReadingFrom: FileManager.default.fileExists(atPath: internalURL.path) ? internalURL : externalURL).readToEnd()!
             let json = try JSON(data: data)
             return ThemeParser.shared.fromJSON(json)

@@ -20,14 +20,24 @@ class SkinCacheStorage {
 
     /// 判断某个账号的缓存是否过期。同时校验缓存内容是合法 PNG（避免 Cloudflare 验证页等脏数据被复用）。
     public func isCacheValid(for account: AnyAccount) -> Bool {
-        guard let cached = skinCache[account.uuid],
-              let ts = cacheTimestamps[account.uuid] else { return false }
+        validCachedSkin(for: account) != nil
+    }
+
+    /// 返回仍然有效的缓存数据，没有则返回 nil。
+    ///
+    /// 合并了原来的「先 isCacheValid 再 skinCache[...]」两步写法：
+    /// `skinCache` 是 CodableAppStorage，每次读都可能要解码整个 PNG 字典，
+    /// 一次头像加载原本要走三遍。
+    public func validCachedSkin(for account: AnyAccount) -> Data? {
+        let cache = skinCache
+        guard let cached = cache[account.uuid],
+              let ts = cacheTimestamps[account.uuid] else { return nil }
         if !Self.isPNG(cached) {
             err("缓存内容不是合法 PNG，自动失效: \(account.uuid)")
-            return false
+            return nil
         }
         let ttl = TimeInterval(max(0, AppSettings.shared.avatarCacheDays) * 86400)
-        return Date().timeIntervalSince1970 - ts < ttl
+        return Date().timeIntervalSince1970 - ts < ttl ? cached : nil
     }
 
     /// PNG 文件头校验（89 50 4E 47 0D 0A 1A 0A）。
@@ -64,15 +74,22 @@ class SkinCacheStorage {
             err("拒绝缓存非 PNG 数据: \(account.uuid), size=\(data.count)")
             return
         }
-        skinCache[account.uuid] = data
-        cacheTimestamps[account.uuid] = Date().timeIntervalSince1970
+        // 读-改-写各一次；下标直接赋值会额外触发一次 getter 全量解码。
+        var cache = skinCache
+        cache[account.uuid] = data
+        skinCache = cache
+
+        var timestamps = cacheTimestamps
+        timestamps[account.uuid] = Date().timeIntervalSince1970
+        cacheTimestamps = timestamps
+
         log("已缓存头像: \(account.uuid), size=\(data.count), ttl=\(AppSettings.shared.avatarCacheDays)d")
     }
 
     /// 加载头像：优先用缓存，过期或缺失则走网络。
     @discardableResult
     public func loadSkin(account: AnyAccount) async throws -> Data {
-        if isCacheValid(for: account), let cached = skinCache[account.uuid] {
+        if let cached = validCachedSkin(for: account) {
             return cached
         }
         let skinData = try await account.getSkinData()
@@ -90,8 +107,8 @@ class SkinCacheStorage {
 
     /// 清空所有缓存。
     public func clearAll() {
-        skinCache.removeAll()
-        cacheTimestamps.removeAll()
+        skinCache = [:]
+        cacheTimestamps = [:]
         clearDecodedCache()
     }
 

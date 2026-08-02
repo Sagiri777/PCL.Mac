@@ -55,13 +55,10 @@ struct JavaListItemView: View {
                 Spacer()
                 if jvm.isAddedByUser {
                     Image(systemName: "trash")
+                        .help("移除这个手动添加的 Java")
                         .onTapGesture {
                             AppSettings.shared.userAddedJvmPaths.removeAll { $0 == jvm.executableURL }
-                            do {
-                                try JavaSearch.searchAndSet()
-                            } catch {
-                                err("在删除手动添加的 Java 并刷新 Java 列表时发生错误: \(error.localizedDescription)")
-                            }
+                            Task { await JavaSearch.searchAndSet() }
                         }
                 }
             }

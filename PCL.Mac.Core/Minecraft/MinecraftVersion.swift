@@ -11,9 +11,14 @@ public class MinecraftVersion: Comparable, Hashable {
     public let displayName: String
     public let type: VersionType
     private var _releaseDate: Date?
+    /// 清单里查不到时也要记住这个结果：`<` 是排序比较器，若每次比较都重跑查找，
+    /// 一次列表排序就会退化成 O(n log n × 清单条数)。
+    private var didResolveReleaseDate = false
     public var releaseDate: Date {
-        if _releaseDate == nil {
+        if !didResolveReleaseDate {
             _releaseDate = VersionManifest.getReleaseDate(self)
+            // 清单还没加载完时不缓存，等清单到位后再解析一次。
+            didResolveReleaseDate = DataManager.shared.versionManifest != nil
         }
         return _releaseDate ?? Date(timeIntervalSince1970: TimeInterval(0))
     }
@@ -63,10 +68,10 @@ public enum VersionType: String, Codable {
             return .release
         }
         
-        guard let version = manifest.versions.find({ $0.id == displayVersion }) else {
+        guard let version = manifest.version(id: displayVersion) else {
             return .release
         }
-        
+
         return version.type
     }
 }

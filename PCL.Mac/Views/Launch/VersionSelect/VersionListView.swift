@@ -14,13 +14,15 @@ struct VersionListView: View {
     struct VersionView: View, Identifiable {
         @State private var isHovered: Bool = false
         private let instanceInfo: InstanceInfo
-        
-        let id: UUID = UUID()
-        
+
+        /// 跟随实例目录，而不是每次构造随机生成 —— 否则 ForEach 身份不稳定。
+        var id: URL { instanceInfo.runningDirectory }
+
         init(instanceInfo: InstanceInfo) {
             self.instanceInfo = instanceInfo
         }
-        
+
+
         var body: some View {
             MyListItem {
                 HStack {
@@ -173,15 +175,13 @@ struct VersionListView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
-                    let notVanillaVersions = minecraftDirectory.instances.filter { $0.brand != .vanilla }
-                    if !notVanillaVersions.isEmpty {
-                        MyCard(index: 0, title: "可安装 Mod") {
+                    // 分组与排序在 body 外算好（见 groupedInstances）：排序比较器要查版本清单，
+                    // 放在 body 里意味着每次 DataManager 变更都重跑一遍。
+                    let groups = groupedInstances
+                    if !groups.modded.isEmpty {
+                        MyCard(index: 0, title: "可安装 Mod (\(groups.modded.count))") {
                             LazyVStack {
-                                ForEach(
-                                    notVanillaVersions
-                                        .sorted(by: { $0.version > $1.version })
-                                        .sorted(by: { $0.brand.index < $1.brand.index })
-                                ) { instanceInfo in
+                                ForEach(groups.modded) { instanceInfo in
                                     VersionView(instanceInfo: instanceInfo)
                                 }
                             }
@@ -189,14 +189,10 @@ struct VersionListView: View {
                         }
                         .padding()
                     }
-                    
-                    MyCard(index: 1, title: "常规版本") {
+
+                    MyCard(index: 1, title: "常规版本 (\(groups.vanilla.count))") {
                         LazyVStack {
-                            ForEach(
-                                minecraftDirectory.instances
-                                    .filter { $0.brand == .vanilla }
-                                    .sorted(by: { $0.version > $1.version })
-                            ) { info in
+                            ForEach(groups.vanilla) { info in
                                 VersionView(instanceInfo: info)
                             }
                         }
@@ -213,6 +209,31 @@ struct VersionListView: View {
         .onAppear { loadInstances(minecraftDirectory) }
     }
     
+    /// 预先分组 + 排序好的实例列表。
+    ///
+    /// 排序键是 `MinecraftVersion.releaseDate`，它要查版本清单，因此这里用
+    /// decorate-sort-undecorate 只解析一次日期，也不再做 `.sorted().sorted()` 双排序。
+    private var groupedInstances: (modded: [InstanceInfo], vanilla: [InstanceInfo]) {
+        var modded: [(info: InstanceInfo, brand: Int, date: Date)] = []
+        var vanilla: [(info: InstanceInfo, date: Date)] = []
+
+        for info in minecraftDirectory.instances {
+            if info.brand == .vanilla {
+                vanilla.append((info, info.version.releaseDate))
+            } else {
+                modded.append((info, info.brand.index, info.version.releaseDate))
+            }
+        }
+
+        // Mod 实例先按加载器分组，同组内新版本在前。
+        modded.sort {
+            $0.brand != $1.brand ? $0.brand < $1.brand : $0.date > $1.date
+        }
+        vanilla.sort { $0.date > $1.date }
+
+        return (modded.map(\.info), vanilla.map(\.info))
+    }
+
     private func loadInstances(_ directory: MinecraftDirectory) {
         AppSettings.shared.currentMinecraftDirectory = directory
         if directory.instances.isEmpty {

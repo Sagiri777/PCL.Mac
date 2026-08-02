@@ -63,6 +63,47 @@ public struct Response: Sendable {
     }
 }
 
+/// 按代理端点复用 URLSession，避免每个请求都新建一个从不释放的 session。
+private final class ProxySessionPool {
+    static let shared = ProxySessionPool()
+
+    private let lock = NSLock()
+    private var sessions: [String: URLSession] = [:]
+
+    func session() -> URLSession {
+        let settings = AppSettings.shared
+        let key = "\(settings.proxyHost):\(settings.proxyPort)"
+
+        lock.lock()
+        if let existing = sessions[key] {
+            lock.unlock()
+            return existing
+        }
+        lock.unlock()
+
+        let created = URLSession(configuration: Requests.makeConfiguration(forceUseProxy: true))
+
+        lock.lock()
+        if let raced = sessions[key] {
+            lock.unlock()
+            created.invalidateAndCancel()
+            return raced
+        }
+        sessions[key] = created
+        lock.unlock()
+        return created
+    }
+
+    func invalidateAll() {
+        lock.lock()
+        let existing = sessions
+        sessions.removeAll()
+        lock.unlock()
+        // finishTasksAndInvalidate：让在途请求正常收尾，不打断当前下载。
+        existing.values.forEach { $0.finishTasksAndInvalidate() }
+    }
+}
+
 public final class Requests: @unchecked Sendable {
     public static func request(
         url: URL,
@@ -157,7 +198,9 @@ public final class Requests: @unchecked Sendable {
         config.timeoutIntervalForRequest = 30
         config.timeoutIntervalForResource = 5 * 60
         config.waitsForConnectivity = true
-        config.httpMaximumConnectionsPerHost = 8
+        // 与 MultiFileDownloader.maximumConcurrentDownloads 对齐：连接数低于任务并发
+        // 时多出来的任务只会在 session 内部排队，白等而已。
+        config.httpMaximumConnectionsPerHost = MultiFileDownloader.maximumConcurrentDownloads
         guard forceUseProxy,
               settings.proxyEnabled,
               !settings.proxyHost.isEmpty,
@@ -177,9 +220,17 @@ public final class Requests: @unchecked Sendable {
     }
 
     /// 构造带代理配置的 URLSession。如果代理未启用，返回默认 session。
+    ///
+    /// 代理 session 会被复用并按 host:port 缓存。旧实现每个请求都新建一个 URLSession
+    /// 且从不 invalidate，开着代理浏览 mod 列表会持续泄漏 session 与连接池。
     public static func makeSession(forceUseProxy: Bool = false) -> URLSession {
         guard forceUseProxy else { return URLSession.shared }
-        return URLSession(configuration: makeConfiguration(forceUseProxy: true))
+        return ProxySessionPool.shared.session()
+    }
+
+    /// 代理配置变更时丢弃已缓存的 session。
+    public static func invalidateProxySessions() {
+        ProxySessionPool.shared.invalidateAll()
     }
 
     public static func post(

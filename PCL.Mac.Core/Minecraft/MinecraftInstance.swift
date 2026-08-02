@@ -11,8 +11,13 @@ import ZIPFoundation
 import Cocoa
 
 public class MinecraftInstance: Identifiable, Equatable, Hashable {
+    /// 实例缓存。`create` 会被 view init、`DataManager.defaultInstance` 以及
+    /// `loadInnerInstances` 的后台 Task 同时调用，必须加锁：并发 miss 会重复跑
+    /// 整套清单解析，还可能损坏字典。
     private static var cache: [URL : MinecraftInstance] = [:]
-    
+    private static let cacheLock = NSLock()
+
+
     private static let RequiredJava16: MinecraftVersion = MinecraftVersion(displayName: "21w19a", type: .snapshot)
     private static let RequiredJava17: MinecraftVersion = MinecraftVersion(displayName: "1.18-pre2", type: .snapshot)
     private static let RequiredJava21: MinecraftVersion = MinecraftVersion(displayName: "24w14a", type: .snapshot)
@@ -43,22 +48,32 @@ public class MinecraftInstance: Identifiable, Equatable, Hashable {
     }
     
     public static func create(_ minecraftDirectory: MinecraftDirectory, _ runningDirectory: URL, config: MinecraftConfig? = nil) -> MinecraftInstance? {
-        if let cached = cache[runningDirectory] {
-            return cached
-        }
-        
+        cacheLock.lock()
+        let cached = cache[runningDirectory]
+        cacheLock.unlock()
+        if let cached { return cached }
+
         let instance: MinecraftInstance = .init(minecraftDirectory: minecraftDirectory, runningDirectory: runningDirectory, config: config)
-        if instance.setup() {
-            cache[runningDirectory] = instance
-            return instance
-        } else {
+        guard instance.setup() else {
             err("实例初始化失败")
             return nil
         }
+
+        cacheLock.lock()
+        // 解析期间可能有别的线程已经放进来了，以先到的为准，保证同一目录只有一个实例对象。
+        if let raced = cache[runningDirectory] {
+            cacheLock.unlock()
+            return raced
+        }
+        cache[runningDirectory] = instance
+        cacheLock.unlock()
+        return instance
     }
-    
+
     public static func clearCache(for runningDirectory: URL) {
+        cacheLock.lock()
         cache.removeValue(forKey: runningDirectory)
+        cacheLock.unlock()
         log("已清理实例缓存: \(runningDirectory.lastPathComponent)")
     }
     
@@ -73,7 +88,8 @@ public class MinecraftInstance: Identifiable, Equatable, Hashable {
     
     private func setup() -> Bool {
         // 若配置文件存在，从文件加载配置
-        if FileManager.default.fileExists(atPath: configPath.path) {
+        let hadConfigFile = FileManager.default.fileExists(atPath: configPath.path)
+        if hadConfigFile {
             do {
                 try loadConfig()
             } catch {
@@ -82,20 +98,29 @@ public class MinecraftInstance: Identifiable, Equatable, Hashable {
             }
         }
         self.config = config ?? MinecraftConfig(version: nil)
-        
+
         if !loadManifest() { return false }
+
+        var configChanged = !hadConfigFile
         if let version = config.minecraftVersion {
             self.version = .init(displayName: version)
         } else {
             detectVersion()
             config.minecraftVersion = version.displayName
+            configChanged = true
         }
-        
+
         // 寻找可用 Java
-        if self.config.javaURL == nil, let jvm = MinecraftInstance.findSuitableJava(self.version!) {
+        if self.config.javaURL == nil, let jvm = MinecraftInstance.findSuitableJava(requiredVersion: requiredJavaVersion) {
             self.config.javaURL = jvm.executableURL
+            configChanged = true
         }
-        self.saveConfig()
+
+        // 只在配置真的变了才落盘。打开版本列表会为目录里每个实例调用一次 setup，
+        // 无条件 saveConfig 意味着每次进入列表都要写 N 个 JSON 文件。
+        if configChanged {
+            self.saveConfig()
+        }
         return true
     }
     
@@ -142,25 +167,32 @@ public class MinecraftInstance: Identifiable, Equatable, Hashable {
         }
     }
     
+    /// 当前实例实际要求的 Java 主版本。新版 Minecraft 应以版本清单为准，
+    /// 旧版清单缺少该字段时再回退到发布时间推断。
+    public var requiredJavaVersion: Int {
+        max(manifest?.javaVersion ?? 0, MinecraftInstance.getMinJavaVersion(version))
+    }
+
     public static func findSuitableJava(_ version: MinecraftVersion) -> JavaVirtualMachine? {
-        let minJavaVersion = getMinJavaVersion(version)
-        var suitableJava: JavaVirtualMachine?
-        for jvm in DataManager.shared.javaVirtualMachines.sorted(by: { $0.version < $1.version }) {
-            if jvm.version < minJavaVersion { continue }
-            
-            suitableJava = jvm
-            
-            if jvm.callMethod == .direct {
-                break
+        findSuitableJava(requiredVersion: getMinJavaVersion(version))
+    }
+
+    public static func findSuitableJava(requiredVersion: Int) -> JavaVirtualMachine? {
+        let candidates = DataManager.shared.javaVirtualMachines
+            .filter { !$0.isError && $0.version >= requiredVersion && $0.callMethod != .incompatible }
+            .sorted {
+                if ($0.callMethod == .direct) != ($1.callMethod == .direct) {
+                    return $0.callMethod == .direct
+                }
+                return $0.version < $1.version
             }
-        }
-        
+        let suitableJava = candidates.first
+
         if suitableJava == nil {
             warn("未找到可用 Java")
-            debug("版本: \(version.displayName)")
-            debug("最低 Java 版本: \(minJavaVersion)")
+            debug("最低 Java 版本: \(requiredVersion)")
         }
-        
+
         return suitableJava
     }
     

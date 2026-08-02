@@ -10,24 +10,36 @@ import SwiftyJSON
 
 public class ThemeParser {
     public static let shared: ThemeParser = .init()
-    public let themes = {
+    /// 可用主题列表。惰性求值：它要扫两个目录并解析每个 json，
+    /// 而只有个性化设置页需要它 —— 不该在启动时（AppSettings.init 触发
+    /// ThemeParser.shared 那一刻）就付这笔成本。
+    public private(set) lazy var themes: [ThemeInfo] = Self.scanThemes()
+
+    /// 重新扫描主题目录。用户往 Themes 目录里放了新主题后可以调用。
+    public func reloadThemes() {
+        themes = Self.scanThemes()
+        Theme.invalidateCache()
+    }
+
+    private static func scanThemes() -> [ThemeInfo] {
         var result: [ThemeInfo] = []
-        
+        var seenIds: Set<String> = []
+
         for folder in [SharedConstants.shared.applicationResourcesURL, SharedConstants.shared.applicationSupportURL.appending(path: "Themes")] {
-            if let files = try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) {
-                let jsonFiles = files.filter { $0.pathExtension.lowercased() == "json" }
-                for jsonFile in jsonFiles {
-                    if let data = try? FileHandle(forReadingFrom: jsonFile).readToEnd(),
-                       let json = try? JSON(data: data),
-                       let id = json["id"].string {
-                        result.append(.init(weight: json["__weight"].intValue, id: id, name: json["name"].stringValue))
-                    }
-                }
+            guard let files = try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) else {
+                continue
+            }
+            for jsonFile in files where jsonFile.pathExtension.lowercased() == "json" {
+                guard let data = try? FileHandle(forReadingFrom: jsonFile).readToEnd(),
+                      let json = try? JSON(data: data),
+                      let id = json["id"].string,
+                      seenIds.insert(id).inserted else { continue }
+                result.append(.init(weight: json["__weight"].intValue, id: id, name: json["name"].stringValue))
             }
         }
-        
+
         return result.sorted { $0.weight > $1.weight }
-    }()
+    }
     
     public func fromJSON(_ json: JSON) -> Theme {
         let id = json["id"].stringValue

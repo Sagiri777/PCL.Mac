@@ -11,13 +11,39 @@ import SwiftyJSON
 public class VersionManifest: Codable {
     private static let aprilFoolVersions: [String] = ["15w14a", "1.rv-pre1", "3d shareware v1.34", "20w14infinite", "22w13oneblockatatime", "23w13a_or_b", "24w14potato", "25w14craftmine"]
     public let latest: LatestVersions
-    public fileprivate(set) var versions: [GameVersion]
-    
+    public fileprivate(set) var versions: [GameVersion] {
+        didSet { indexCache = nil }
+    }
+
+    /// id → GameVersion 索引。
+    ///
+    /// `VersionType.parse` 与 `getReleaseDate` 原来对 `versions`（约 1000 条）做线性
+    /// 查找，而这两个方法出现在排序比较器和列表 body 中：一个支持 50 个游戏版本的
+    /// Mod 行就要几万次字符串比较。索引把每次查找降到一次哈希。
+    /// 不参与 Codable（见 CodingKeys），否则会把索引一并写进 UserDefaults。
+    private var indexCache: [String: GameVersion]? = nil
+
+    private enum CodingKeys: String, CodingKey {
+        case latest
+        case versions
+    }
+
+    public func version(id: String) -> GameVersion? {
+        if let indexCache { return indexCache[id] }
+        var built: [String: GameVersion] = .init(minimumCapacity: versions.count)
+        // 先出现的条目优先，与旧的 find 行为保持一致。
+        for version in versions where built[version.id] == nil {
+            built[version.id] = version
+        }
+        indexCache = built
+        return built[id]
+    }
+
     public init(_ json: JSON) {
         self.latest = LatestVersions(json["latest"])
         self.versions = json["versions"].arrayValue.map(GameVersion.init)
     }
-    
+
     public struct LatestVersions: Codable {
         public let release: String
         public let snapshot: String
@@ -35,8 +61,12 @@ public class VersionManifest: Codable {
         public let time: Date
         public let releaseTime: Date
         
+        /// 解析清单要构造上千个 GameVersion；ISO8601DateFormatter 的初始化并不便宜，
+        /// 复用同一个实例（只在 init 内同步使用，不跨线程持有）。
+        private static let iso8601Formatter = ISO8601DateFormatter()
+
         public init(_ json: JSON) {
-            let formatter = ISO8601DateFormatter()
+            let formatter = GameVersion.iso8601Formatter
             self.id = json["id"].stringValue.replacing(" Pre-Release ", with: "-pre")
             self.type = .init(rawValue: json["type"].stringValue) ?? .release
             self.url = json["url"].stringValue
@@ -81,16 +111,16 @@ public class VersionManifest: Codable {
     }
     
     public func getLatestRelease() -> GameVersion {
-        return self.versions.find { $0.id == self.latest.release }!
+        return self.version(id: self.latest.release)!
     }
-    
+
     public func getLatestSnapshot() -> GameVersion {
-        return self.versions.find { $0.id == self.latest.snapshot }!
+        return self.version(id: self.latest.snapshot)!
     }
-    
+
     public static func getReleaseDate(_ version: MinecraftVersion) -> Date? {
         if let manifest = DataManager.shared.versionManifest {
-            return manifest.versions.find { $0.id == version.displayName }?.releaseTime // 需要缓存
+            return manifest.version(id: version.displayName)?.releaseTime
         } else {
             warn("正在获取 \(version.displayName) 的发布日期，但版本清单未初始化完成") // 哦天呐，不会吧哥们
         }

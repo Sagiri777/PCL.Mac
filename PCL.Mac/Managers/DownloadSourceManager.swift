@@ -17,14 +17,21 @@ public class DownloadSourceManager: DownloadSource {
     private var fileDownloadSource: DownloadSource
     private var versionManifestSource: DownloadSource
 
+    /// 建议的并发下载数。
+    ///
+    /// 上限由 `MultiFileDownloader.maximumConcurrentDownloads` 与
+    /// `URLSessionConfiguration.httpMaximumConnectionsPerHost` 共同约束，
+    /// 这里报出比它们更大的数字没有意义（只会让任务在 session 队列里排队）。
     public var recommendedConcurrency: Int {
         switch AppSettings.shared.fileDownloadSource {
         case .official:
-            return 48
+            return MultiFileDownloader.maximumConcurrentDownloads
         case .mirror:
-            return 16
+            return 12
         case .both:
-            return fileDownloadSource is BMCLAPIDownloadSource ? 16 : 48
+            return fileDownloadSource is BMCLAPIDownloadSource
+                ? 12
+                : MultiFileDownloader.maximumConcurrentDownloads
         }
     }
     
@@ -76,17 +83,22 @@ public class DownloadSourceManager: DownloadSource {
     private func testSpeed(_ url: URLConvertible, _ source: inout DownloadSource) async {
         source = official
         let before = Date()
-        
-        let data: Data
+
+        let destination = SharedConstants.shared.temperatureURL.appending(path: "testspeed")
+        let byteCount: Int
         do {
-            try await SingleFileDownloader.download(url: url.url, destination: URL(fileURLWithPath: "/tmp/testspeed"), replaceMethod: .replace)
-            data = try FileHandle(forReadingFrom: URL(fileURLWithPath: "/tmp/testspeed")).readToEnd().unwrap()
+            try await SingleFileDownloader.download(url: url.url, destination: destination, replaceMethod: .replace)
+            // 只要大小，用文件属性即可 —— 之前是把整个 jar 读进内存再取 count。
+            let values = try destination.resourceValues(forKeys: [.fileSizeKey])
+            byteCount = values.fileSize ?? 0
         } catch {
             return
         }
-        
+        defer { try? FileManager.default.removeItem(at: destination) }
+
+        guard byteCount > 0 else { return }
         let timeUsed: Double = Date().timeIntervalSince(before)
-        let speed = Double(data.count) / timeUsed / 1024 / 1024
+        let speed = Double(byteCount) / timeUsed / 1024 / 1024
         debug(String(format: "\(url.url.lastPathComponent) 下载耗时 %.2fs (%.2f MB/s)", timeUsed, speed))
         if speed < 1 { // 1 MB
             source = bmclapi

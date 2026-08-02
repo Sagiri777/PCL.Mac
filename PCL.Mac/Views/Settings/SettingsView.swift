@@ -40,7 +40,7 @@ struct SettingsView: View {
             }
             
             if dataManager.javaVirtualMachines.isEmpty {
-                try? JavaSearch.searchAndSet()
+                Task { await JavaSearch.searchAndSet() }
             }
         }
     }

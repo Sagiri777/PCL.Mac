@@ -35,6 +35,8 @@ public class InstallTask: ObservableObject, Identifiable, Hashable, Equatable {
     public func updateStage(_ stage: InstallStage) {
         debug("切换阶段: \(stage.getDisplayName())")
         DispatchQueue.main.async {
+            // 上一阶段攒下的完成数先结清，避免阶段切换时进度回跳。
+            self.flushProgress()
             self.stage = stage
             self.currentStagePercentage = 0
         }
@@ -46,6 +48,7 @@ public class InstallTask: ObservableObject, Identifiable, Hashable, Equatable {
     
     public func complete() {
         log("下载任务结束")
+        self.flushProgress()
         self.updateStage(.end)
         DispatchQueue.main.async {
             DataManager.shared.inprogressInstallTasks = nil
@@ -56,9 +59,46 @@ public class InstallTask: ObservableObject, Identifiable, Hashable, Equatable {
         }
     }
     
+    /// 已完成文件数的合并计数器。
+    ///
+    /// 一次原版安装有约 4000 个资源文件，逐个 `DispatchQueue.main.async` 修改
+    /// `@Published remainingFiles` 会产生 4000 次主队列派发 + 4000 次全量 SwiftUI 失效。
+    /// 这里把增量攒起来，最多每 100ms 冲一次到主线程。
+    private let pendingLock = NSLock()
+    private var pendingCompleted = 0
+    private var isFlushScheduled = false
+
     public func completeOneFile() {
-        DispatchQueue.main.async {
-            self.remainingFiles -= 1
+        pendingLock.lock()
+        pendingCompleted += 1
+        let shouldSchedule = !isFlushScheduled
+        if shouldSchedule { isFlushScheduled = true }
+        pendingLock.unlock()
+
+        guard shouldSchedule else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            self?.flushCompletedFiles()
+        }
+    }
+
+    /// 把攒下的完成数一次性写入 `remainingFiles`。必须在主线程调用。
+    private func flushCompletedFiles() {
+        pendingLock.lock()
+        let delta = pendingCompleted
+        pendingCompleted = 0
+        isFlushScheduled = false
+        pendingLock.unlock()
+
+        guard delta > 0 else { return }
+        remainingFiles -= delta
+    }
+
+    /// 阶段结束时立刻把剩余增量刷出去，避免进度条停在差几个文件的位置。
+    public func flushProgress() {
+        if Thread.isMainThread {
+            flushCompletedFiles()
+        } else {
+            DispatchQueue.main.async { [weak self] in self?.flushCompletedFiles() }
         }
     }
 }

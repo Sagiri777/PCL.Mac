@@ -54,8 +54,18 @@ final class LogStore {
             if self.writeImmediately && write {
                 self.appendToDisk(message + "\n")
             }
-            print(message)
+            // stdout 只在开发构建下用得上；发布版里 print 是纯开销
+            // （Minecraft 一次启动能刷几千行）。
+            if SharedConstants.shared.isDevelopment {
+                print(message)
+            }
         }
+    }
+
+    /// 把常驻日志句柄关掉，确保退出时缓冲区落盘。
+    func flushAndClose() {
+        queue.sync { }
+        FileManager.closeLogHandle()
     }
     
     func appendToDisk(_ content: String, _ callback: ((Bool) -> Void)? = nil) {

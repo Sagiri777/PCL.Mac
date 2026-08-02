@@ -51,10 +51,6 @@ public class JavaVirtualMachine: Identifiable, Equatable {
         return isJdk ? "JDK" : "JRE"
     }
     
-    private func asyncDetectVersion() async {
-        (version, displayVersion) = JavaVirtualMachine.detectVersion(url: executableURL)
-    }
-    
     public static func of(_ executableURL: URL, _ addedByUser: Bool? = nil) -> JavaVirtualMachine {
         // 判断文件是否合法
         guard FileManager.default.fileExists(atPath: executableURL.path) else {
@@ -114,9 +110,7 @@ public class JavaVirtualMachine: Identifiable, Equatable {
         
         let jvm = JavaVirtualMachine(arch: arch, version: version, displayVersion: displayVersion, implementor: implementor, executableURL: executableURL, callMethod: callMethod ?? .incompatible, isJdk: isJdk, _isAddedByUser: addedByUser)
         if asyncDetect {
-            Task {
-                await jvm.asyncDetectVersion()
-            }
+            (jvm.version, jvm.displayVersion) = detectVersion(url: executableURL)
         }
         return jvm
     }
