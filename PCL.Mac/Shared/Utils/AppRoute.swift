@@ -96,6 +96,10 @@ public enum AppRoute: Hashable {
 
 public class AppRouter: ObservableObject {
     @Published public var path: [AppRoute] = [.launch]
+
+    public var canGoBack: Bool {
+        path.count > 1
+    }
     
     public func append(_ route: AppRoute) {
         path.append(route)
@@ -129,6 +133,28 @@ public class AppRouter: ObservableObject {
             JavaInstallView()
         }
     }
+
+    /// 当前页面所属的“容器”标识。
+    ///
+    /// 很多路由共享同一个容器 view（例如 `.settings` / `.personalization` /
+    /// `.javaSettings` 都是 `SettingsView`，内部再按子路由切换）。ContentView 用它
+    /// 作为 `.id()`：只有真正换了容器时才重建视图树，容器内的子路由切换走正常 diff。
+    public func getLastViewIdentity() -> String {
+        switch getLast() {
+        case .launch: "launch"
+        case .accountManagement, .accountList, .newAccount: "account"
+        case .download, .minecraftDownload, .projectSearch: "download"
+        case .multiplayer: "multiplayer"
+        case .settings, .personalization, .javaSettings, .otherSettings: "settings"
+        case .others, .about, .toolbox, .debug: "others"
+        case .installing(let tasks): "installing-\(tasks.id)"
+        case .versionSelect, .versionList: "versionSelect"
+        case .projectDownload(let summary): "projectDownload-\(summary.modId)"
+        case .announcementHistory: "announcementHistory"
+        case .versionSettings, .instanceOverview, .instanceSettings, .instanceMods: "versionSettings"
+        case .javaDownload: "javaDownload"
+        }
+    }
     
     public func getDebugText() -> String {
         return "/" + path.map { $0.name }.joined(separator: "/")
@@ -139,6 +165,17 @@ public class AppRouter: ObservableObject {
         if self.path.isEmpty {
             self.path.append(.launch)
         }
+    }
+
+    /// 统一菜单、旧标题栏与 Liquid Glass 工具栏的返回语义。
+    ///
+    /// 账号、版本选择和版本设置都是“容器路由 + 容器内子路由”两层结构；
+    /// 离开它们时需要先退出子路由，再退出容器。普通页面只退一层。
+    public func goBack() {
+        guard canGoBack else { return }
+        let leavesContainer = (getLastView() as? SubRouteContainer)?.shouldPop() == true
+        let removalCount = min(leavesContainer ? 2 : 1, path.count - 1)
+        path = Array(path.dropLast(removalCount))
     }
     
     public func setRoot(_ root: AppRoute) {

@@ -8,7 +8,7 @@
 import SwiftUI
 
 struct MyList<Content: View>: View {
-    @ObservedObject private var dataManager: DataManager = .shared
+    @ObservedObject private var router = DataManager.shared.router
     
     let content: (AppRoute, Bool) -> Content
     @Binding var cases: [AppRoute]
@@ -17,16 +17,21 @@ struct MyList<Content: View>: View {
     @State private var hovering: AppRoute? = nil
     @State private var appeared: Set<AppRoute> = []
     
+    /// 停在容器根路由时要自动进入的默认子页面。
+    ///
+    /// 不在 init 里直接改 router：在 View 初始化过程中发布状态变更会额外触发一轮
+    /// 渲染，也容易引出 "Modifying state during view update"。改为记下来，
+    /// 等 onAppear 再跳。
+    private let root: AppRoute?
+
     init(root: AppRoute? = nil, cases: Binding<[AppRoute]>, animationIndex: Int = 0, height: CGFloat = 32, @ViewBuilder content: @escaping (AppRoute, Bool) -> Content) {
         self._cases = cases
         self.content = content
         self.animationIndex = animationIndex
         self.height = height
-        if let root = root, dataManager.router.getLast() == root {
-            dataManager.router.append(cases.first!.wrappedValue)
-        }
+        self.root = root
     }
-    
+
     var body: some View {
         // 用 ScrollView + LazyVStack 替代 VStack：长 sidebar 嵌套时只渲染可见项，
         // 避免一次性实例化所有 RouteView（每个都订阅 DataManager）。
@@ -35,26 +40,34 @@ struct MyList<Content: View>: View {
                 ForEach(cases.indices, id: \.self) { index in
                     let item = cases[index]
                     RouteView(content: content, item: item, height: height)
-                        .offset(x: appeared.contains(item) ? 0 : -dataManager.leftTabWidth / 2)
+                        .offset(x: appeared.contains(item) ? 0 : -DataManager.shared.leftTabWidth / 2)
                         .opacity(appeared.contains(item) ? 1 : 0)
+                        .animation(
+                            .spring(response: 0.4, dampingFraction: 0.65)
+                                .delay(Double(index + animationIndex) * 0.038),
+                            value: appeared.contains(item)
+                        )
                         .onAppear {
-                            if !appeared.contains(item) {
-                                DispatchQueue.main.asyncAfter(deadline: .now() + Double(index + animationIndex) * 0.038) {
-                                    let item1 = item
-                                    withAnimation(.spring(response: 0.4, dampingFraction: 0.65)) {
-                                        _ = appeared.insert(item1)
-                                    }
-                                }
-                            }
+                            // 入场动画用 .delay 修饰器排队，不再为每一行派发一个
+                            // asyncAfter（那些 block 在快速切页时会堆积并互相打断）。
+                            _ = appeared.insert(item)
                         }
                 }
             }
         }
+        .onAppear(perform: enterDefaultRouteIfNeeded)
+    }
+
+    /// 如果当前正停在容器根路由上，进入列表里的第一项。
+    private func enterDefaultRouteIfNeeded() {
+        guard let root, let first = cases.first else { return }
+        guard router.getLast() == root else { return }
+        router.append(first)
     }
 }
 
 fileprivate struct RouteView<Content: View>: View {
-    @ObservedObject private var dataManager: DataManager = .shared
+    @ObservedObject private var router = DataManager.shared.router
     
     @State private var isHovered: Bool = false
     @State private var indicatorHeight: CGFloat
@@ -74,7 +87,7 @@ fileprivate struct RouteView<Content: View>: View {
         Button(action: selectRoute) {
             HStack {
                 Group {
-                    if dataManager.router.getLast().isSame(item) {
+                    if router.getLast().isSame(item) {
                         RoundedRectangle(cornerRadius: 5)
                             .foregroundStyle(AnyShapeStyle(AppSettings.shared.theme.getTextStyle()))
                     } else {
@@ -83,10 +96,10 @@ fileprivate struct RouteView<Content: View>: View {
                 }
                 .frame(width: 4, height: indicatorHeight)
 
-                content(item, dataManager.router.getLast().isSame(item))
+                content(item, router.getLast().isSame(item))
                     .frame(height: height)
                     .padding(.leading, 5)
-                    .animation(.easeInOut(duration: 0.2), value: dataManager.router.getLast())
+                    .animation(.easeInOut(duration: 0.2), value: router.getLast())
                 Spacer()
             }
             .frame(maxWidth: .infinity, minHeight: height)
@@ -99,9 +112,9 @@ fileprivate struct RouteView<Content: View>: View {
     }
 
     private func selectRoute() {
-        if dataManager.router.getLast().isSame(item) { return }
-        dataManager.router.removeLast()
-        dataManager.router.append(item)
+        if router.getLast().isSame(item) { return }
+        router.removeLast()
+        router.append(item)
         indicatorHeight = 10
         withAnimation(.spring(duration: 0.2)) {
             indicatorHeight = height - 8

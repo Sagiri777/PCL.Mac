@@ -32,7 +32,7 @@ class DraggableHelperView: NSView {
 }
 
 struct GenericTitleBarView<Content: View>: View {
-    @ObservedObject private var dataManager: DataManager = .shared
+    @ObservedObject private var settings = AppSettings.shared
     @ViewBuilder let content: () -> Content
 
     var body: some View {
@@ -42,13 +42,16 @@ struct GenericTitleBarView<Content: View>: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .contentShape(Rectangle())
                 HStack(alignment: .center) {
-                    if AppSettings.shared.windowControlButtonStyle == .macOS {
-                        WindowControlButton.MacOSClose
-                        WindowControlButton.MacOSMiniaturize
+                    if settings.windowControlButtonStyle == .macOS,
+                       settings.trafficLightPosition == .topLeft {
+                        TrafficLightControls(visibility: settings.trafficLightVisibility)
                     }
                     content()
                     Spacer()
-                    if AppSettings.shared.windowControlButtonStyle == .pcl {
+                    if settings.windowControlButtonStyle == .macOS,
+                       settings.trafficLightPosition == .topRight {
+                        TrafficLightControls(visibility: settings.trafficLightVisibility)
+                    } else if settings.windowControlButtonStyle == .pcl {
                         WindowControlButton.Miniaturize
                         WindowControlButton.Close
                     }
@@ -58,14 +61,12 @@ struct GenericTitleBarView<Content: View>: View {
         }
         .frame(maxWidth: .infinity, maxHeight: 48)
         .background(
-            AppSettings.shared.theme.getStyle()
+            settings.theme.getStyle()
         )
     }
 }
 
 struct TitleBarView: View {
-    @ObservedObject private var dataManager: DataManager = DataManager.shared
-    
     var body: some View {
         GenericTitleBarView {
             Group {
@@ -79,28 +80,23 @@ struct TitleBarView: View {
                         .foregroundStyle(AppSettings.shared.theme.getTextStyle())
                 }
                 Spacer()
-                MenuItemButton(route: .launch, parent: self)
-                MenuItemButton(route: .download, parent: self)
-//                MenuItemButton(route: .multiplayer, parent: self)
-                MenuItemButton(route: .settings, parent: self)
-                MenuItemButton(route: .others, parent: self)
+                MenuItemButton(route: .launch)
+                MenuItemButton(route: .download)
+//                MenuItemButton(route: .multiplayer)
+                MenuItemButton(route: .settings)
+                MenuItemButton(route: .others)
             }
         }
     }
 }
 
 struct SubviewTitleBarView: View {
-    @ObservedObject private var dataManager: DataManager = DataManager.shared
+    @ObservedObject private var router = DataManager.shared.router
 
     var body: some View {
         GenericTitleBarView {
-            switch AppSettings.shared.windowControlButtonStyle {
-            case .pcl:
-                WindowControlButton.Back
-            case .macOS:
-                WindowControlButton.MacOSBack
-            }
-            Text(dataManager.router.getLast().title)
+            WindowControlButton.Back
+            Text(router.getLast().title)
                 .font(.custom("PCL English", size: 16))
                 .foregroundStyle(.white)
         }
@@ -108,20 +104,19 @@ struct SubviewTitleBarView: View {
 }
 
 struct MenuItemButton: View {
-    @ObservedObject private var dataManager: DataManager = DataManager.shared
+    @ObservedObject private var router = DataManager.shared.router
     
     let route: AppRoute
-    let parent: TitleBarView
     var icon: Image?
     @State private var isHovered = false
     
     var body: some View {
         Button {
-            if dataManager.router.getRoot() != route { dataManager.router.setRoot(route) }
+            if router.getRoot() != route { router.setRoot(route) }
         } label: {
             ZStack {
                 RoundedRectangle(cornerRadius: 13)
-                    .foregroundStyle(dataManager.router.getRoot() == route ? .white : (isHovered ? Color(hex: 0xFFFFFF, alpha: 0.17) : .clear))
+                    .foregroundStyle(router.getRoot() == route ? .white : (isHovered ? Color(hex: 0xFFFFFF, alpha: 0.17) : .clear))
                 HStack(spacing: 7) {
                     getImage()
                         .resizable()
@@ -129,7 +124,7 @@ struct MenuItemButton: View {
                         .frame(width: 16, height: 16)
                     Text(getText())
                 }
-                .foregroundStyle(dataManager.router.getRoot() == route ? AnyShapeStyle(AppSettings.shared.theme.getTextStyle()) : AnyShapeStyle(.white))
+                .foregroundStyle(router.getRoot() == route ? AnyShapeStyle(AppSettings.shared.theme.getTextStyle()) : AnyShapeStyle(.white))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .contentShape(Rectangle())
@@ -137,8 +132,10 @@ struct MenuItemButton: View {
         .buttonStyle(.plain)
         .frame(width: 75, height: 27)
         .animation(.easeInOut(duration: 0.2), value: isHovered)
-        .animation(.easeInOut(duration: 0.2), value: dataManager.router.getRoot() == route)
+        .animation(.easeInOut(duration: 0.2), value: router.getRoot() == route)
         .onHover { isHovered = $0 }
+        .accessibilityLabel(getText())
+        .accessibilityAddTraits(router.getRoot() == route ? .isSelected : [])
     }
     
     private func getImage() -> Image {

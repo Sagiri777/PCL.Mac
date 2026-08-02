@@ -84,7 +84,7 @@ struct PersonalizationView: View {
                     .padding()
                     if settings.glassEnabled {
                         Text(settings.windowControlButtonStyle == .macOS
-                             ? "系统样式：使用可配置位置与呼出模式的原生交通灯。"
+                             ? "macOS 样式：使用应用内交通灯，位置与呼出模式可即时调整。"
                              : "PCL 样式：隐藏系统交通灯，使用右上角自绘窗口按钮。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -123,12 +123,14 @@ struct PersonalizationView: View {
                                 GlassValueSlider(title: "右侧背景圆角", value: visual($settings.glassContentCornerRadius), range: 4...32, step: 1, format: .points)
                             }
 
-                            GlassSettingsSection(title: "交通灯", systemImage: "lightspectrum.horizontal") {
-                                OptionStack("显示位置") {
-                                    MyComboBox(options: TrafficLightPosition.allCases, selection: windowConfig($settings.trafficLightPosition), label: { $0.getLabel() }) { $0 }
-                                }
-                                OptionStack("显示模式") {
-                                    MyComboBox(options: TrafficLightVisibility.allCases, selection: windowConfig($settings.trafficLightVisibility), label: { $0.getLabel() }) { $0 }
+                            if settings.windowControlButtonStyle == .macOS {
+                                GlassSettingsSection(title: "交通灯", systemImage: "lightspectrum.horizontal") {
+                                    OptionStack("显示位置") {
+                                        MyComboBox(options: TrafficLightPosition.allCases, selection: windowConfig($settings.trafficLightPosition), label: { $0.getLabel() }) { $0 }
+                                    }
+                                    OptionStack("显示模式") {
+                                        MyComboBox(options: TrafficLightVisibility.allCases, selection: windowConfig($settings.trafficLightVisibility), label: { $0.getLabel() }) { $0 }
+                                    }
                                 }
                             }
 

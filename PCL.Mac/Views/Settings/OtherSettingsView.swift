@@ -91,6 +91,7 @@ struct OtherSettingsView: View {
                     Toggle("启用 HTTP/HTTPS 代理", isOn: $settings.proxyEnabled)
                         .toggleStyle(.switch)
                         .font(.system(size: 13))
+                        .onChange(of: settings.proxyEnabled) { Requests.invalidateProxySessions() }
                     Text("启用后所有网络请求（皮肤/CDN/微软登录/版本列表）走代理。常用于访问被墙的官方 Mojang 资源。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -102,6 +103,8 @@ struct OtherSettingsView: View {
                             .textFieldStyle(.roundedBorder)
                             .disabled(!settings.proxyEnabled)
                             .frame(maxWidth: 200)
+                            // 代理端点变了要丢弃缓存的 session，否则新设置对已建立的连接无效。
+                            .onSubmit { Requests.invalidateProxySessions() }
                         Text("端口")
                             .font(.system(size: 12))
                             .frame(width: 40, alignment: .leading)
@@ -112,9 +115,11 @@ struct OtherSettingsView: View {
                             .textFieldStyle(.roundedBorder)
                             .disabled(!settings.proxyEnabled)
                             .frame(width: 100)
+                            .onSubmit { Requests.invalidateProxySessions() }
                     }
                     HStack {
                         MyButton(text: "测试代理") {
+                            Requests.invalidateProxySessions()
                             testProxy()
                         }
                         .frame(width: 100, height: 28)

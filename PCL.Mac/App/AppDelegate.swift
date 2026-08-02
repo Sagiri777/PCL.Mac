@@ -29,11 +29,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: 初始化 Java 列表
+    /// 后台搜索，不阻塞首屏。Java 列表只在进入设置或启动游戏时才需要，
+    /// 那两条路径都已经能处理“还在搜索中”的空列表。
     private func initJavaList() {
-        do {
-            try JavaSearch.searchAndSet()
-        } catch {
-            err("无法初始化 Java 列表: \(error.localizedDescription)")
+        Task.detached(priority: .userInitiated) {
+            await JavaSearch.searchAndSet()
         }
     }
 
@@ -73,13 +73,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         initJavaList()
         log("App 初始化完成, 耗时 \(Int((Date().timeIntervalSince1970 - start) * 1000))ms")
 
-        let daemonProcess = Process()
-        daemonProcess.executableURL = SharedConstants.shared.applicationResourcesURL.appending(path: "daemon")
-        do {
-            try daemonProcess.run()
-            log("守护进程已启动")
-        } catch {
-            err("无法开启守护进程: \(error.localizedDescription)")
+        startDaemon()
+    }
+
+    /// 守护进程与首屏无关：fork/exec 放到后台队列，别占主线程。
+    private func startDaemon() {
+        let executableURL = SharedConstants.shared.applicationResourcesURL.appending(path: "daemon")
+        guard FileManager.default.fileExists(atPath: executableURL.path) else {
+            warn("未找到守护进程可执行文件，跳过启动")
+            return
+        }
+        DispatchQueue.global(qos: .utility).async {
+            let daemonProcess = Process()
+            daemonProcess.executableURL = executableURL
+            do {
+                try daemonProcess.run()
+                log("守护进程已启动")
+            } catch {
+                err("无法开启守护进程: \(error.localizedDescription)")
+            }
         }
     }
 
@@ -97,6 +109,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         LogStore.shared.save()
+        LogStore.shared.flushAndClose()
         Task {
             NSApplication.shared.reply(toApplicationShouldTerminate: true)
         }

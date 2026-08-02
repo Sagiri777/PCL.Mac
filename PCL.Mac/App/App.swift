@@ -22,21 +22,7 @@ struct PCL_MacApp: App {
         }
         .defaultSize(width: 980, height: 650)
         .commands {
-            CommandGroup(replacing: .appInfo) {
-                Button("关于 PCL.Mac") {
-                    DataManager.shared.router.setRoot(.others)
-                    DataManager.shared.router.append(.about)
-                }
-            }
-            
-            CommandGroup(replacing: .appSettings) {
-                Button("设置") {
-                    DataManager.shared.router.setRoot(.settings)
-                    DataManager.shared.router.append(.personalization)
-                }
-            }
-            
-            CommandGroup(replacing: .newItem) { } // 修复 #21
+            AppCommands()
         }
         .windowStyle(.hiddenTitleBar) // 避免刚启动时闪一下标题栏
     }
@@ -76,14 +62,14 @@ struct WindowAccessor: NSViewRepresentable {
             window.titlebarAppearsTransparent = true
             window.titleVisibility = .hidden
             window.toolbarStyle = .unified
-            if settings.windowControlButtonStyle == .macOS {
-                coordinator.configureTrafficLights(window: window, position: settings.trafficLightPosition, visibility: settings.trafficLightVisibility, frameWidth: settings.glassFrameWidth)
-            } else {
-                coordinator.hideSystemTrafficLights(window)
-            }
+            coordinator.hideSystemTrafficLights(window)
         } else {
             coordinator.leaveGlassMode()
-            window.styleMask = [.borderless, .miniaturizable, .resizable]
+            // miniaturizable 只对带标题栏的窗口生效。保留透明的系统标题栏能力，
+            // 视觉仍由应用自绘，窗口服务器则能正常创建 Dock 最小化 counterpart。
+            window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
+            window.titlebarAppearsTransparent = true
+            window.titleVisibility = .hidden
             coordinator.hideSystemTrafficLights(window)
             if let contentView = window.contentView {
                 contentView.wantsLayer = true
@@ -91,19 +77,19 @@ struct WindowAccessor: NSViewRepresentable {
                 contentView.layer?.masksToBounds = true
             }
         }
+        coordinator.observeWindowLifecycle(window)
     }
 
     final class Coordinator {
         private var appliedFrameWidth: Double?
-        private var hoverMonitor: Any?
-        private var trafficConfiguration: String?
-        private weak var hoverWindow: NSWindow?
-        private var hoverPosition: TrafficLightPosition = .topLeft
-        private var hoverButtons: [NSButton] = []
+        private weak var observedWindow: NSWindow?
+        private var windowObservers: [NSObjectProtocol] = []
         /// 记录上次 configure 时的 appearanceRevision，避免重复 configure。
         var lastAppearanceRevision: UInt = UInt.max
 
-        deinit { removeHoverMonitor() }
+        deinit {
+            removeWindowObservers()
+        }
 
         func enterGlassMode(window: NSWindow, frameWidth: Double) {
             let old = appliedFrameWidth ?? frameWidth
@@ -122,41 +108,26 @@ struct WindowAccessor: NSViewRepresentable {
 
         func leaveGlassMode() {
             appliedFrameWidth = nil
-            trafficConfiguration = nil
-            removeHoverMonitor()
         }
 
         func hideSystemTrafficLights(_ window: NSWindow) {
-            trafficConfiguration = "hidden-system"
-            removeHoverMonitor()
             setButtons(trafficButtons(window), visible: false)
         }
 
-        func configureTrafficLights(window: NSWindow, position: TrafficLightPosition, visibility: TrafficLightVisibility, frameWidth: Double) {
-            let configuration = "\(position.rawValue)-\(visibility.rawValue)-\(frameWidth)-\(window.frame.width)"
-            guard trafficConfiguration != configuration else { return }
-            trafficConfiguration = configuration
-            let buttons = trafficButtons(window)
-            guard buttons.count == 3 else { return }
-            let spacing: CGFloat = 20
-            guard let container = buttons[0].superview else { return }
-            let y = max(6, (container.bounds.height - buttons[0].frame.height) / 2)
-            let firstX: CGFloat = position == .topLeft
-                ? max(12, frameWidth * 0.62)
-                : max(12, container.bounds.width - frameWidth * 0.62 - spacing * 3)
-            for (index, button) in buttons.enumerated() {
-                button.setFrameOrigin(NSPoint(x: firstX + CGFloat(index) * spacing, y: y))
-            }
+        /// AppKit 会在进出全屏时重建部分标题栏层级；完成转换后再次隐藏原生按钮，
+        /// 防止它们与 SwiftUI 自绘交通灯短暂重叠。
+        func observeWindowLifecycle(_ window: NSWindow) {
+            guard observedWindow !== window else { return }
+            removeWindowObservers()
+            observedWindow = window
 
-            switch visibility {
-            case .always:
-                removeHoverMonitor()
-                setButtons(buttons, visible: true)
-            case .hidden:
-                removeHoverMonitor()
-                setButtons(buttons, visible: false)
-            case .hover:
-                installHoverMonitor(window: window, position: position, buttons: buttons)
+            let center = NotificationCenter.default
+            for name in [NSWindow.didEnterFullScreenNotification, NSWindow.didExitFullScreenNotification] {
+                let token = center.addObserver(forName: name, object: window, queue: .main) { [weak self, weak window] _ in
+                    guard let self, let window else { return }
+                    self.hideSystemTrafficLights(window)
+                }
+                windowObservers.append(token)
             }
         }
 
@@ -171,38 +142,12 @@ struct WindowAccessor: NSViewRepresentable {
             }
         }
 
-        private func installHoverMonitor(window: NSWindow, position: TrafficLightPosition, buttons: [NSButton]) {
-            removeHoverMonitor()
-            hoverWindow = window
-            hoverPosition = position
-            hoverButtons = buttons
-            setButtons(buttons, visible: false)
-            window.acceptsMouseMovedEvents = true
-
-            // 使用全局事件监视器：SwiftUI 的 ScrollView/控件可能吞掉 local mouseMoved，
-            // 导致只有设置页空白区域能触发。屏幕坐标检测不依赖当前页面命中链。
-            hoverMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged]) { [weak self] _ in
-                DispatchQueue.main.async { self?.updateHoverVisibility() }
+        private func removeWindowObservers() {
+            for observer in windowObservers {
+                NotificationCenter.default.removeObserver(observer)
             }
-            updateHoverVisibility()
-        }
-
-        private func updateHoverVisibility() {
-            guard let window = hoverWindow, !hoverButtons.isEmpty else { return }
-            let mouse = NSEvent.mouseLocation
-            let frame = window.frame
-            let nearTop = mouse.y >= frame.maxY - 76 && mouse.y <= frame.maxY + 8
-            let nearSide = hoverPosition == .topLeft
-                ? mouse.x >= frame.minX - 8 && mouse.x <= frame.minX + 150
-                : mouse.x <= frame.maxX + 8 && mouse.x >= frame.maxX - 150
-            setButtons(hoverButtons, visible: nearTop && nearSide)
-        }
-
-        private func removeHoverMonitor() {
-            if let hoverMonitor { NSEvent.removeMonitor(hoverMonitor) }
-            hoverMonitor = nil
-            hoverWindow = nil
-            hoverButtons = []
+            windowObservers.removeAll()
+            observedWindow = nil
         }
     }
 }
