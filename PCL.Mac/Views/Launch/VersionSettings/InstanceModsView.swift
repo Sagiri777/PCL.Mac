@@ -50,8 +50,9 @@ struct InstanceModsView: View {
     @State private var searchQuery: String = ""
     @State private var mods: [ModItem]? = nil
     @State private var error: Error?
-    @State private var filter: (Mod) -> Bool = { _ in true }
     @State private var importRows: [ModpackImportListItem] = []
+    @State private var compatibilityReport: NativeCompatibilityReport?
+    @State private var compatibilityBusyIDs: Set<String> = []
 
     /// Drop 进入/离开时的视觉反馈。
     @State private var isDropHovering: Bool = false
@@ -102,10 +103,8 @@ struct InstanceModsView: View {
         } else {
             ZStack {
                 ScrollView {
-                    MySearchBox(query: $searchQuery, placeholder: "搜索资源 名称 / 描述") { query in
-                        filter = { query.isEmpty || $0.name.contains(query) || $0.description.contains(query) }
-                    }
-                    .padding()
+                    MySearchBox(query: $searchQuery, placeholder: "搜索已安装 Mod 的名称或描述（⌘F）") { _ in }
+                        .padding()
 
                     TitlelessMyCard(index: 1) {
                         HStack(spacing: 16) {
@@ -124,13 +123,20 @@ struct InstanceModsView: View {
                     }
                     .padding()
 
+                    if let report = compatibilityReport, !report.issues.isEmpty {
+                        compatibilityPanel(report)
+                            .padding(.horizontal)
+                            .padding(.bottom)
+                    }
+
                     if let mods = mods {
-                        TitlelessMyCard(index: 2) {
+                        let visible = filteredMods(mods)
+                        TitlelessMyCard(index: 3) {
                             LazyVStack(spacing: 0) {
                                 ForEach(importRows) { item in
                                     ModpackImportProgressView(item: item)
                                 }
-                                ForEach(mods.filter { filter($0.mod) }) { modItem in
+                                ForEach(visible) { modItem in
                                     ModView(modItem: modItem)
                                 }
                                 if mods.isEmpty && importRows.isEmpty {
@@ -147,15 +153,35 @@ struct InstanceModsView: View {
                                     }
                                     .frame(maxWidth: .infinity)
                                     .padding(.vertical, 28)
+                                } else if visible.isEmpty && importRows.isEmpty {
+                                    // 有 mod 但都被搜索条件筛掉了 —— 明确说明，而不是留一片空白。
+                                    VStack(spacing: 6) {
+                                        Image(systemName: "magnifyingglass")
+                                            .font(.system(size: 28))
+                                            .foregroundStyle(Color(hex: 0x8C8C8C))
+                                        Text("没有匹配「\(searchQuery)」的 Mod")
+                                            .font(.custom("PCL English", size: 14))
+                                            .foregroundStyle(Color("TextColor"))
+                                        Text("共 \(mods.count) 个已安装 Mod")
+                                            .font(.custom("PCL English", size: 12))
+                                            .foregroundStyle(Color(hex: 0x8C8C8C))
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 24)
                                 }
                             }
                         }
                         .frame(maxWidth: .infinity)
                         .padding()
                     } else {
-                        Text("加载中……")
-                            .font(.custom("PCL English", size: 14))
-                            .foregroundStyle(Color("TextColor"))
+                        VStack(spacing: 10) {
+                            ProgressView().scaleEffect(0.8)
+                            Text("正在读取 Mod 列表……")
+                                .font(.custom("PCL English", size: 14))
+                                .foregroundStyle(Color(hex: 0x8C8C8C))
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 40)
                     }
 
                     Spacer()
@@ -185,6 +211,250 @@ struct InstanceModsView: View {
         }
 
     }
+
+    private func compatibilityPanel(_ report: NativeCompatibilityReport) -> some View {
+        TitlelessMyCard(index: 2) {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: 11) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(AppSettings.shared.theme.getAccentColor().opacity(0.13))
+                        Image(systemName: "shield.lefthalf.filled")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundStyle(AppSettings.shared.theme.getTextStyle())
+                    }
+                    .frame(width: 38, height: 38)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Mac 原生兼容性")
+                            .font(.custom("PCL English", size: 15))
+                            .foregroundStyle(Color("TextColor"))
+                        Text("已隔离 \(report.disabledCount) 个 · 官方补全 \(report.installedOfficialArtifactCount) 个 · 待确认 \(report.unresolvedCount) 个")
+                            .font(.custom("PCL English", size: 12))
+                            .foregroundStyle(Color(hex: 0x8C8C8C))
+                    }
+                    Spacer()
+                    Button {
+                        taskID = UUID()
+                    } label: {
+                        Label("重新检查", systemImage: "arrow.clockwise")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+                .padding(12)
+
+                Divider().opacity(0.3)
+
+                ForEach(Array(report.issues.enumerated()), id: \.element.id) { index, issue in
+                    compatibilityIssueRow(issue)
+                    if index < report.issues.count - 1 {
+                        Divider().padding(.leading, 52).opacity(0.25)
+                    }
+                }
+            }
+        }
+    }
+
+    private func compatibilityIssueRow(_ issue: NativeCompatibilityIssue) -> some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: issue.isApplied ? "checkmark.shield.fill" : issue.severity == .blocking ? "xmark.shield.fill" : "exclamationmark.shield.fill")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(compatibilityColor(issue))
+                    .frame(width: 28, height: 28)
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 7) {
+                        Text(issue.modName)
+                            .font(.custom("PCL English", size: 14))
+                            .foregroundStyle(Color("TextColor"))
+                        Text(issue.isApplied ? (issue.action == .installOfficialArtifact ? "官方组件已补全" : "已隔离") : issue.isUserRestored ? "已由你恢复" : issue.severity == .blocking ? "不可直接运行" : "待确认")
+                            .font(.custom("PCL English", size: 10))
+                            .foregroundStyle(compatibilityColor(issue))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(compatibilityColor(issue).opacity(0.10), in: Capsule())
+                    }
+                    Text(issue.reason)
+                        .font(.custom("PCL English", size: 12))
+                        .foregroundStyle(Color(hex: 0x6F7780))
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(issue.installedReplacementRelativePath ?? issue.disabledRelativePath ?? issue.relativePath)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(Color(hex: 0x8C8C8C))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                Spacer(minLength: 10)
+                if issue.isApplied {
+                    Button(issue.action == .installOfficialArtifact ? "移除" : "恢复") {
+                        restoreCompatibilityIssue(issue)
+                    }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(compatibilityBusyIDs.contains(issue.id))
+                } else if issue.isUserRestored {
+                    Button("重新隔离") { reenableCompatibilityFix(issue) }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(compatibilityBusyIDs.contains(issue.id))
+                }
+            }
+
+            if let fixError = issue.fixError {
+                Label(fixError, systemImage: "exclamationmark.triangle.fill")
+                    .font(.custom("PCL English", size: 11))
+                    .foregroundStyle(Color.red)
+                    .padding(.leading, 38)
+            }
+
+            if !issue.replacementCandidates.isEmpty {
+                VStack(alignment: .leading, spacing: 7) {
+                    Text("可选替代 · 按可信度降序，未替你选择")
+                        .font(.custom("PCL English", size: 11))
+                        .foregroundStyle(Color(hex: 0x8C8C8C))
+                    ForEach(issue.replacementCandidates) { candidate in
+                        replacementCandidateRow(candidate, issue: issue)
+                    }
+                }
+                .padding(.leading, 38)
+            }
+        }
+        .padding(12)
+    }
+
+    private func replacementCandidateRow(_ candidate: ReplacementCandidate, issue: NativeCompatibilityIssue) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(alignment: .center, spacing: 10) {
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text("\(candidate.name) \(candidate.version)")
+                            .font(.custom("PCL English", size: 12))
+                            .foregroundStyle(Color("TextColor"))
+                        Text("可信度 \(candidate.trustScore.total)")
+                            .font(.system(size: 9, weight: .semibold, design: .rounded))
+                            .foregroundStyle(AppSettings.shared.theme.getTextStyle())
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 2)
+                            .background(AppSettings.shared.theme.getAccentColor().opacity(0.10), in: Capsule())
+                    }
+                    Text("\(candidate.upstreamRelationship) · \(candidate.licenseIdentifier) · \(candidate.architectures.joined(separator: ", "))")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(Color(hex: 0x8C8C8C))
+                        .lineLimit(1)
+                }
+                Spacer()
+                if issue.installedReplacementCandidateID == candidate.id {
+                    Label("已安装", systemImage: "checkmark.circle.fill")
+                        .font(.custom("PCL English", size: 11))
+                        .foregroundStyle(AppSettings.shared.theme.getTextStyle())
+                } else {
+                    Button("选择并安装") { installReplacement(candidate, for: issue) }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .disabled(!issue.isApplied || compatibilityBusyIDs.contains(issue.id))
+                }
+            }
+
+            DisclosureGroup {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("commit \(candidate.commit) · 已验证 macOS \(candidate.architectures.joined(separator: ", "))")
+                    Text("评分：上游 \(candidate.trustScore.sourceAndUpstream)×35% · 构建 \(candidate.trustScore.reproducibility)×25% · 采用 \(candidate.trustScore.ecosystemValidation)×20% · 维护 \(candidate.trustScore.maintenanceAndSecurity)×15% · 许可证 \(candidate.trustScore.licenseCompleteness)×5%")
+                    Text("SHA-256  \(candidate.sha256)")
+                        .textSelection(.enabled)
+                    HStack(spacing: 12) {
+                        Link("源码", destination: candidate.sourceURL)
+                        if let upstreamURL = candidate.upstreamURL {
+                            Link("上游", destination: upstreamURL)
+                        }
+                        Link("CI / 构建证明", destination: candidate.buildEvidenceURL)
+                        if let patchURL = candidate.patchURL {
+                            Link("补丁", destination: patchURL)
+                        }
+                        if let sbomURL = candidate.sbomURL {
+                            Link("SBOM", destination: sbomURL)
+                        }
+                    }
+                }
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(Color(hex: 0x707780))
+                .padding(.top, 3)
+            } label: {
+                Text("查看来源与验证详情")
+                    .font(.custom("PCL English", size: 10))
+                    .foregroundStyle(Color(hex: 0x707780))
+            }
+        }
+        .padding(8)
+        .background(Color("TextColor").opacity(0.025), in: RoundedRectangle(cornerRadius: 6))
+    }
+
+    private func compatibilityColor(_ issue: NativeCompatibilityIssue) -> Color {
+        if issue.isApplied || issue.isUserRestored { return AppSettings.shared.theme.getAccentColor() }
+        return issue.severity == .blocking ? Color(hex: 0xE5484D) : Color(hex: 0xD18B16)
+    }
+
+    private func restoreCompatibilityIssue(_ issue: NativeCompatibilityIssue) {
+        guard compatibilityBusyIDs.insert(issue.id).inserted else { return }
+        Task {
+            defer { compatibilityBusyIDs.remove(issue.id) }
+            do {
+                try await NativeCompatibilityService.shared.restore(issueID: issue.id, instance: instance)
+                let message = issue.action == .installOfficialArtifact
+                    ? "已移除 \(issue.modName) 的官方 Mac 组件"
+                    : "已恢复 \(issue.modName)"
+                hint(message, .finish)
+                taskID = UUID()
+            } catch {
+                err("无法恢复 \(issue.modName)：\(error.localizedDescription)")
+                hint("恢复失败：\(error.localizedDescription)", .critical)
+            }
+        }
+    }
+
+    private func installReplacement(_ candidate: ReplacementCandidate, for issue: NativeCompatibilityIssue) {
+        guard compatibilityBusyIDs.insert(issue.id).inserted else { return }
+        Task {
+            defer { compatibilityBusyIDs.remove(issue.id) }
+            do {
+                try await NativeCompatibilityService.shared.installReplacement(candidate, for: issue.id, instance: instance)
+                hint("已安装你选择的替代包 \(candidate.name)", .finish)
+                taskID = UUID()
+            } catch {
+                err("无法安装替代包 \(candidate.name)：\(error.localizedDescription)")
+                hint("替代包安装失败：\(error.localizedDescription)", .critical)
+            }
+        }
+    }
+
+    private func reenableCompatibilityFix(_ issue: NativeCompatibilityIssue) {
+        guard compatibilityBusyIDs.insert(issue.id).inserted else { return }
+        Task {
+            defer { compatibilityBusyIDs.remove(issue.id) }
+            do {
+                try await NativeCompatibilityService.shared.reenableAutomaticFix(
+                    issueID: issue.id,
+                    instance: instance
+                )
+                hint("已重新启用 \(issue.modName) 的自动隔离", .finish)
+                taskID = UUID()
+            } catch {
+                err("无法重新启用自动隔离：\(error.localizedDescription)")
+                hint("操作失败：\(error.localizedDescription)", .critical)
+            }
+        }
+    }
+    /// 按搜索词过滤。原来存的是一个 `(Mod) -> Bool` 闭包 @State，只在 onSubmit 时更新，
+    /// 于是边打字列表不会跟着变；现在直接由 searchQuery 派生，输入即筛选。
+    private func filteredMods(_ mods: [ModItem]) -> [ModItem] {
+        let query = searchQuery.trimmingCharacters(in: .whitespaces)
+        guard !query.isEmpty else { return mods }
+        return mods.filter {
+            $0.mod.name.localizedCaseInsensitiveContains(query)
+            || $0.mod.description.localizedCaseInsensitiveContains(query)
+            || ($0.mod.summary?.name.localizedCaseInsensitiveContains(query) ?? false)
+        }
+    }
+
     // MARK: - 拖入 / 列表加载
 
     /// Drop 时显示的半透明覆盖层。`allowsHitTesting(false)` 让它不吃事件，
@@ -332,11 +602,35 @@ struct InstanceModsView: View {
     }
 
     /// 加载当前实例的 mods/ 下所有 .jar / .jar.disabled，更新 mods 数组。
-    /// 同时清空搜索条件以避免残留状态。
     private func loadMods() async {
         if instance.clientBrand == .vanilla { return }
         // 与 .task(id: taskID) 配合：bumping taskID 会触发重新加载。
         do {
+            do {
+                let configuredJava: URL? = instance.config.javaURL
+                let architecture = configuredJava.map { Architecture.getArchOfFile($0) } ?? .system
+                let processArchitecture: Architecture = switch architecture {
+                case .unknown, .fatFile: .system
+                default: architecture
+                }
+                let scanned = try await NativeCompatibilityService.shared.analyze(
+                    instance: instance,
+                    targetArchitecture: processArchitecture
+                )
+                let report = try await NativeCompatibilityService.shared.applyTrustedFixes(report: scanned)
+                await MainActor.run {
+                    compatibilityReport = report
+                }
+            } catch {
+                // Compatibility diagnostics are useful, but a damaged JAR or
+                // state file must not make the ordinary Mod list unusable.
+                warn("Mod 页面 Mac 兼容性检查失败：\(error.localizedDescription)")
+                let previous = await NativeCompatibilityService.shared.lastReport(instance: instance)
+                await MainActor.run {
+                    compatibilityReport = previous
+                }
+            }
+
             let modsDir = instance.runningDirectory.appending(path: "mods")
             let fm = FileManager.default
             var loaded: [ModItem] = []
@@ -349,17 +643,18 @@ struct InstanceModsView: View {
                 for modFile in modFiles {
                     if let mod = Mod.loadMod(url: modFile) {
                         loaded.append(.init(mod: mod, url: modFile))
-                        loadSummary(mod: mod)
                     }
                 }
                 loaded.sort { ($0.mod.name.first ?? " ") < ($1.mod.name.first ?? " ") }
             }
+            let result = loaded
             await MainActor.run {
-                self.mods = loaded
+                self.mods = result
             }
+            // 列表已经能显示了，再去拉 Modrinth 元数据。
+            await loadSummaries(for: result.map(\.mod))
         } catch {
             // ❗关键：catch 路径必须显式 resolve UI 状态。否则 mods 仍是 nil → "加载中……" 转圈死锁。
-            // 之前这里只写 self.error = error，结果 mods 没设，UI 一直停在 nil / 加载中。
             await MainActor.run {
                 self.mods = []
                 self.error = error
@@ -367,29 +662,49 @@ struct InstanceModsView: View {
         }
     }
 
+    /// 拉取 Modrinth 元数据，并发上限 6。
+    ///
+    /// 原来是每个 mod 一个不受限的 Task，200 个 mod 的实例会瞬间发出约 400 个请求，
+    /// 必定触发 Modrinth 限流，并把主线程淹没在 summary 写入里。
+    private func loadSummaries(for mods: [Mod]) async {
+        guard !mods.isEmpty else { return }
+        let concurrencyLimit = 6
+        let version = instance.version
+        let brand = instance.clientBrand
 
-    
-    private func loadSummary(mod: Mod) {
-        Task {
-            if let summary = try? await ModrinthProjectSearcher.shared.get(mod.id) { // 若 slug 与 Mod ID 一致，使用通过 Mod ID 获取到的 Project
-                await MainActor.run {
-                    mod.summary = summary
-                }
-            } else { // 否则搜索最匹配的 Mod
-                if let summary = try? await ModrinthProjectSearcher.shared.search(
-                    type: .mod,
-                    query: mod.name,
-                    version: instance.version,
-                    loader: instance.clientBrand,
-                    limit: 1
-                ).first {
-                    await MainActor.run {
-                        mod.summary = summary
-                    }
-                } else {
-                    warn("未找到 \(mod.id) 对应的 Modrinth Project")
+        await withTaskGroup(of: Void.self) { group in
+            var nextIndex = 0
+            func addNext() {
+                guard nextIndex < mods.count else { return }
+                let mod = mods[nextIndex]
+                nextIndex += 1
+                group.addTask {
+                    await InstanceModsView.fetchSummary(for: mod, version: version, brand: brand)
                 }
             }
+
+            for _ in 0..<min(concurrencyLimit, mods.count) { addNext() }
+            while await group.next() != nil { addNext() }
+        }
+    }
+
+    private static func fetchSummary(for mod: Mod, version: MinecraftVersion?, brand: ClientBrand?) async {
+        // 若 slug 与 Mod ID 一致，直接用 Mod ID 拿 Project。
+        if let summary = try? await ModrinthProjectSearcher.shared.get(mod.id) {
+            await MainActor.run { mod.summary = summary }
+            return
+        }
+        // 否则退回按名字搜索最匹配的一项。
+        if let summary = try? await ModrinthProjectSearcher.shared.search(
+            type: .mod,
+            query: mod.name,
+            version: version,
+            loader: brand,
+            limit: 1
+        ).first {
+            await MainActor.run { mod.summary = summary }
+        } else {
+            warn("未找到 \(mod.id) 对应的 Modrinth Project")
         }
     }
     
@@ -463,26 +778,26 @@ struct InstanceModsView: View {
     struct ModView: View {
         @ObservedObject private var dataManager: DataManager = .shared
         @ObservedObject private var mod: Mod
-        @ObservedObject private var state: ProjectSearchViewState = StateManager.shared.projectSearch
         @State private var isHovered: Bool = false
         @State private var isSwitching = false
         @State private var url: URL
-        
+
         private var isDisabled: Bool { url.pathExtension.lowercased() == "disabled" }
-        
+
         fileprivate init(modItem: ModItem) {
             self.mod = modItem.mod
             self.url = modItem.url
         }
-        
+
         var body: some View {
             MyListItem {
                 HStack(alignment: .center) {
-                    getIconImage()
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: 34)
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                    ProjectIconView(
+                        projectId: mod.summary?.projectId,
+                        iconURL: mod.summary?.iconURL,
+                        size: 34,
+                        cornerRadius: 6
+                    )
                     VStack(alignment: .leading, spacing: 2) {
                         HStack(spacing: 0) {
                             Text(mod.summary?.name ?? mod.name)
@@ -545,40 +860,21 @@ struct InstanceModsView: View {
         private func toggleDisable() {
             guard !isSwitching else { return }
             isSwitching = true
-            
-            let newURL: URL
-            
-            if isDisabled {
-                newURL = url.deletingPathExtension()
-            } else {
-                newURL = url.appendingPathExtension("disabled")
+
+            let newURL: URL = isDisabled
+                ? url.deletingPathExtension()
+                : url.appendingPathExtension("disabled")
+
+            do {
+                try FileManager.default.moveItem(at: url, to: newURL)
+                url = newURL
+                hint(isDisabled ? "已停用 \(mod.name)" : "已启用 \(mod.name)", .finish)
+            } catch {
+                // 之前用 try? 静默失败：文件被占用时按钮看起来没反应。
+                err("无法切换 Mod 启用状态: \(error.localizedDescription)")
+                hint("无法切换 \(mod.name)：\(error.localizedDescription)", .critical)
             }
-            try? FileManager.default.moveItem(at: url, to: newURL)
-            url = newURL
             isSwitching = false
-        }
-        
-        /// 获取未经任何处理的模组图标 Image
-        private func getIconImage() -> Image {
-            if let summary = mod.summary {
-                if let icon = state.iconCache[summary.projectId] {
-                    return icon
-                } else {
-                    Task {
-                        if let url = summary.iconURL,
-                           let data = await Requests.get(url).data,
-                           let nsImage = NSImage(data: data) {
-                            DispatchQueue.main.async {
-                                self.state.iconCache[summary.projectId] = Image(nsImage: nsImage)
-                            }
-                        }
-                    }
-                    return Image("ModIconPlaceholder")
-                }
-            }
-            
-            // TODO: 读取 Mod 图标
-            return Image("ModIconPlaceholder")
         }
     }
 }

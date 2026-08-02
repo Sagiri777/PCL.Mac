@@ -235,29 +235,34 @@ public class MinecraftInstaller {
     // MARK: 下载依赖项
     private static func downloadLibraries(_ task: MinecraftInstallTask) async throws {
         task.updateStage(.clientLibraries)
-        
-        var libraryNames: [String] = []
+        prepareManifest(task)
+
+        // getNeededLibraries() 每次调用都要过滤一遍库表；取一次复用。
+        let libraries = try task.manifest.unwrap().getNeededLibraries(for: task.architecture)
+        // 下载源在一次安装内不变，循环外取一次即可（内部会读设置 + 可能测速）。
+        let source = DownloadSourceManager.shared.getDownloadSource()
+
+        var downloadedNames: Set<String> = []
         var items: [DownloadItem] = []
-        
-        for library in try task.manifest.unwrap().getNeededLibraries() {
-            if let artifact = library.artifact {
-                let dest = task.minecraftDirectory.librariesURL.appending(path: artifact.path)
-                if CacheStorage.default.copy(name: library.name, to: dest) {
-                    continue
-                }
-                
-                let source = DownloadSourceManager.shared.getDownloadSource()
-                guard let url = source.getLibraryURL(library) else { continue }
-                libraryNames.append(library.name)
-                items.append(.init(source, { _ in url }, destination: dest))
+
+        for library in libraries {
+            guard let artifact = library.artifact else { continue }
+            let dest = task.minecraftDirectory.librariesURL.appending(path: artifact.path)
+            let cacheKey = "\(library.name)#\(library.role.rawValue)#\(artifact.path)"
+            if CacheStorage.default.copy(name: cacheKey, to: dest) {
+                continue
             }
+            guard let url = source.getLibraryURL(library) else { continue }
+            downloadedNames.insert(library.name)
+            items.append(.init(source, { _ in url }, destination: dest))
         }
-        
+
         try await MultiFileDownloader(task: task, items: items).start()
-        
-        for library in task.manifest!.getNeededLibraries() {
-            if libraryNames.contains(library.name), let artifact = library.artifact {
-                CacheStorage.default.add(name: library.name, path: task.minecraftDirectory.librariesURL.appending(path: artifact.path))
+
+        for library in libraries {
+            if downloadedNames.contains(library.name), let artifact = library.artifact {
+                let cacheKey = "\(library.name)#\(library.role.rawValue)#\(artifact.path)"
+                CacheStorage.default.add(name: cacheKey, path: task.minecraftDirectory.librariesURL.appending(path: artifact.path))
             }
         }
     }
@@ -265,44 +270,50 @@ public class MinecraftInstaller {
     // MARK: 下载本地库
     private static func downloadNatives(_ task: MinecraftInstallTask) async throws {
         task.updateStage(.natives)
-        
-        var libraryNames: [String] = []
+
+        // 同 downloadLibraries：清单查询和下载源都在循环外取一次。
+        let natives = try task.manifest.unwrap().getNeededNatives(for: task.architecture)
+        let source = DownloadSourceManager.shared.getDownloadSource()
+
+        var downloadedNames: Set<String> = []
         var items: [DownloadItem] = []
-        
-        for (library, artifact) in try task.manifest.unwrap().getNeededNatives() {
+
+        for (library, artifact) in natives {
             let dest = task.minecraftDirectory.librariesURL.appending(path: artifact.path)
-            if CacheStorage.default.copy(name: library.name, to: dest) {
+            let cacheKey = "\(library.name)#\(library.role.rawValue)#\(artifact.path)"
+            if CacheStorage.default.copy(name: cacheKey, to: dest) {
                 continue
             }
-            
-            let source = DownloadSourceManager.shared.getDownloadSource()
             guard let url = source.getLibraryURL(library) else { continue }
-            libraryNames.append(library.name)
+            downloadedNames.insert(library.name)
             items.append(.init(source, { _ in url }, destination: dest))
         }
-        
+
         try? FileManager.default.createDirectory(at: task.versionURL.appending(path: "natives"), withIntermediateDirectories: true)
         try await MultiFileDownloader(task: task, items: items).start()
-        
-        for (library, artifact) in task.manifest!.getNeededNatives() {
-            if libraryNames.contains(library.name) {
-                CacheStorage.default.add(name: library.name, path: task.minecraftDirectory.librariesURL.appending(path: artifact.path))
-            }
+
+        for (library, artifact) in natives where downloadedNames.contains(library.name) {
+            let cacheKey = "\(library.name)#\(library.role.rawValue)#\(artifact.path)"
+            CacheStorage.default.add(name: cacheKey, path: task.minecraftDirectory.librariesURL.appending(path: artifact.path))
         }
     }
     
     // MARK: 解压本地库
     private static func unzipNatives(_ task: MinecraftInstallTask) throws {
         let nativesURL: URL = task.versionURL.appending(path: "natives")
-        for (_, native) in task.manifest!.getNeededNatives() {
+        for (_, native) in task.manifest!.getNeededNatives(for: task.architecture) {
             let jarURL: URL = task.minecraftDirectory.librariesURL.appending(path: native.path)
             Util.unzip(archiveURL: jarURL, destination: nativesURL, replace: true)
-            do {
-                try processLibs(task, nativesURL)
-            } catch {
-                err("处理 natives 失败")
-                throw error
-            }
+        }
+
+        // processLibs 会递归遍历整个 natives/ 目录、校验架构并清理非 dylib 文件。
+        // 之前它在循环体内，于是每解压一个 jar 就重跑一整遍遍历 —— 全部解压完只做
+        // 一次就够，结果完全相同。
+        do {
+            try processLibs(task, nativesURL)
+        } catch {
+            err("处理 natives 失败")
+            throw error
         }
     }
     
@@ -319,13 +330,11 @@ public class MinecraftInstaller {
                   !resourceValues.isDirectory! else { continue }
             
             // 验证架构
-            if fileURL.pathExtension == "dylib" {
-                let arch = Architecture.getArchOfFile(fileURL)
-                guard arch.isCompatiable(with: task.architecture) else {
-                    try? fileManager.removeItem(at: fileURL)
-                    log("已清除架构不匹配的可执行文件: \(fileURL.lastPathComponent)")
-                    continue
-                }
+            let arch = Architecture.getArchOfFile(fileURL)
+            guard arch.isCompatiable(with: task.architecture) else {
+                try? fileManager.removeItem(at: fileURL)
+                log("已清除架构不匹配的可执行文件: \(fileURL.lastPathComponent)")
+                continue
             }
             
             // 拷贝到 natives 根目录
@@ -362,7 +371,7 @@ public class MinecraftInstaller {
         instance?.saveConfig()
         
         // 修改 GLFW
-        if let glfw = task.manifest!.getNeededLibraries().find({ $0.name.contains("lwjgl-glfw") }) {
+        if let glfw = task.manifest!.getNeededLibraries(for: task.architecture).find({ $0.name.contains("lwjgl-glfw") }) {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/java")
             process.environment = ProcessInfo.processInfo.environment
@@ -400,10 +409,22 @@ public class MinecraftInstaller {
     // MARK: 获取进度
     public static func updateProgress(_ task: MinecraftInstallTask) {
         DispatchQueue.main.async {
-            task.totalFiles = 3 + task.assetIndex!.objects.count + task.manifest!.getNeededLibraries().count + task.manifest!.getNeededNatives().count
+            task.totalFiles = 3 + task.assetIndex!.objects.count
+                + task.manifest!.getNeededLibraries(for: task.architecture).count
+                + task.manifest!.getNeededNatives(for: task.architecture).count
             log("总文件数: \(task.totalFiles)")
             task.remainingFiles = task.totalFiles - 2
         }
+    }
+
+    /// Dependency normalization is explicit and architecture-aware. Keeping it
+    /// out of deduplication prevents a harmless merge from silently applying an
+    /// x64 mapping to an arm64 install (or vice versa).
+    private static func prepareManifest(_ task: MinecraftInstallTask) {
+        guard let manifest = task.manifest else { return }
+        ClientManifest.deduplicateLibraries(manifest)
+        ArtifactVersionMapper.map(manifest, arch: task.architecture)
+        ClientManifest.deduplicateLibraries(manifest)
     }
     
     // MARK: 创建任务
@@ -411,6 +432,7 @@ public class MinecraftInstaller {
         let task = MinecraftInstallTask(minecraftVersion: minecraftVersion, minecraftDirectory: minecraftDirectory, name: name) { task in
             try await downloadClientManifest(task)
             try await downloadAssetIndex(task)
+            prepareManifest(task)
             updateProgress(task)
             try await downloadClientJar(task)
             
@@ -430,6 +452,8 @@ public class MinecraftInstaller {
             guard task.manifest != nil else {
                 throw MyLocalizedError(reason: "无法解析 Mod Loader 客户端清单。")
             }
+            prepareManifest(task)
+            updateProgress(task)
             
             modifyId(task)
             try await downloadHashResourcesFiles(task)

@@ -17,12 +17,12 @@ public struct ArtifactVersionMapper {
         // 以下条件通过代表使用 -cp 方式添加本地库，这种方式一定会有 natives-macos-arm64，无需更改就能启动游戏
         // 未通过则大概率没有写 arm64 架构的本地库 (例如 1.18.2)
         // 懒得开 Issue，所以写这吧 awa
-        if manifest.getNeededNatives().isEmpty {
+        if manifest.getNeededNatives(for: arch).isEmpty {
             return
         }
         
         // MARK: - 替换依赖项版本
-        for library in manifest.getNeededLibraries() {
+        for library in manifest.getNeededLibraries(for: arch) {
             switch library.groupId {
             case "org.lwjgl":
                 if library.version.starts(with: "3.") && library.version != "3.3.3" {
@@ -48,7 +48,7 @@ public struct ArtifactVersionMapper {
         }
         
         // MARK: - 替换本地库版本
-        for (library, artifact) in manifest.getNeededNatives() {
+        for (library, artifact) in manifest.getNeededNatives(for: arch) {
             switch library.groupId {
             case "org.lwjgl":
                 if library.version.starts(with: "3.") && library.version != "3.3.3" {

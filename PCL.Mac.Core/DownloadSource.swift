@@ -64,6 +64,7 @@ public class BMCLAPIDownloadSource: DownloadSource {
     }
     
     public func getLibraryURL(_ library: ClientManifest.Library) -> URL? {
-        return URL(string: "https://bmclapi2.bangbang93.com/maven")!.appending(path: Util.toPath(mavenCoordinate: library.name))
+        guard let path = library.artifact?.path, !path.isEmpty else { return nil }
+        return URL(string: "https://bmclapi2.bangbang93.com/maven")!.appending(path: path)
     }
 }

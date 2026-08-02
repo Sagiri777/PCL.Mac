@@ -34,6 +34,8 @@ public enum CrashReason: String, Codable, Sendable, CaseIterable {
     case specificEntity = "特定实体导致崩溃"
     case modIncompatible = "Mod 与当前 Minecraft 版本不兼容"
     case missingDependency = "缺少 Mod 依赖"
+    case windowsNativeLibrary = "Mod 尝试在 macOS 加载 Windows DLL"
+    case nativeArchitectureMismatch = "原生组件与游戏进程架构不兼容"
     case noModInstalled = "未安装 Mod，不进行堆栈分析"
     case unknown = "未知崩溃原因"
 
@@ -82,6 +84,10 @@ public enum CrashReason: String, Codable, Sendable, CaseIterable {
             return "Mod 与当前 Minecraft 版本不兼容。更新 Mod 或降级 Minecraft。"
         case .missingDependency:
             return "缺少某个 Mod 依赖。安装完整依赖后重试。"
+        case .windowsNativeLibrary:
+            return "PCL.Mac 会在下次启动前定位并可逆隔离已确认的 Windows-only Mod；也可在版本设置的 Mod 页面查看证据。"
+        case .nativeArchitectureMismatch:
+            return "选择与原生组件一致的 Java 架构；只有 x86_64 macOS 组件时，可让整个游戏通过 Rosetta 运行。"
         case .noModInstalled:
             return "未安装任何 Mod，不需要排查 Mod 问题。"
         case .unknown:
@@ -277,6 +283,7 @@ public class MinecraftCrashHandler {
         var rawAnalysis: [String] = []
         var reasons: [CrashReason] = []
         var fabricSolutions: [String] = []
+        var suspectedMods: [String] = []
 
         // 把全部文本当成 "LogAll"，下游模式匹配用
         let logAll = (mcLog) + "\n" + hsErr + "\n" + mcCrash
@@ -337,6 +344,30 @@ public class MinecraftCrashHandler {
         if mcLog.contains("Found multiple arguments for option fml.forgeVersion, but you asked for only one") {
             reasons.append(.duplicateForgeInJson)
             rawAnalysis.append("matched: duplicate-forge-in-json")
+        }
+
+        // ----- macOS 原生组件 -----
+        let nativeLog = logAll.lowercased()
+        if nativeLog.contains("unsatisfiedlinkerror") && nativeLog.contains(".dll") {
+            reasons.append(.windowsNativeLibrary)
+            rawAnalysis.append("matched: windows-native-library")
+            let pattern = #"([A-Za-z0-9_+.\-]+\.dll)"#
+            if let regex = try? NSRegularExpression(pattern: pattern),
+               let match = regex.firstMatch(in: logAll, range: NSRange(logAll.startIndex..., in: logAll)),
+               let range = Range(match.range(at: 1), in: logAll) {
+                suspectedMods.append(String(logAll[range]).trimmingCharacters(in: .whitespacesAndNewlines))
+            }
+        }
+        let architectureMarkers = [
+            "mach-o, but wrong architecture",
+            "no suitable image found",
+            "incompatible architecture",
+            "have 'x86_64', need 'arm64'",
+            "have 'arm64', need 'x86_64'"
+        ]
+        if architectureMarkers.contains(where: nativeLog.contains) {
+            reasons.append(.nativeArchitectureMismatch)
+            rawAnalysis.append("matched: native-architecture-mismatch")
         }
 
         // ----- 显卡 -----
@@ -419,7 +450,6 @@ public class MinecraftCrashHandler {
         }
 
         // ----- Suspected Mod（Forge crash report）-----
-        var suspectedMods: [String] = []
         if mcCrash.contains("Suspected Mod") {
             reasons.append(.suspectedMod)
             rawAnalysis.append("matched: suspected-mod")

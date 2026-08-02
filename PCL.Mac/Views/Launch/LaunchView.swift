@@ -10,9 +10,13 @@ import SwiftUI
 fileprivate struct LeftTab: View {
     @ObservedObject private var dataManager: DataManager = .shared
     @ObservedObject private var accountManager: AccountManager = .shared
-    
+
     @State private var instance: MinecraftInstance?
-    
+    /// 启动流程进行中。用于禁用按钮并给出反馈 —— 之前连点几次“启动游戏”
+    /// 会并发跑多份前置检查和资源校验。
+    @State private var isLaunching: Bool = false
+
+
     private var accountView: some View {
         MyListItem {
             VStack {
@@ -50,18 +54,19 @@ fileprivate struct LeftTab: View {
             accountView
             Spacer()
             if let instance = self.instance {
-                MyButton(text: "启动游戏", descriptionText: instance.name, foregroundStyle: AppSettings.shared.theme.getTextStyle()) {
-                    let launchOptions: LaunchOptions = .init()
-                    
-                    Task {
-                        guard await launchPrecheck(launchOptions) else { return }
-                        debug("正在启动游戏")
-                        await instance.launch(launchOptions)
-                    }
+                MyButton(
+                    text: isLaunching ? "正在启动……" : "启动游戏",
+                    descriptionText: instance.name,
+                    foregroundStyle: AppSettings.shared.theme.getTextStyle()
+                ) {
+                    launch(instance)
                 }
                 .frame(height: 55)
                 .padding()
                 .padding(.bottom, -27)
+                .disabled(isLaunching)
+                .opacity(isLaunching ? 0.7 : 1)
+                .animation(.easeInOut(duration: 0.15), value: isLaunching)
             } else {
                 MyButton(text: "下载游戏", descriptionText: "未找到可用的游戏版本") {
                     dataManager.router.setRoot(.download)
@@ -74,7 +79,8 @@ fileprivate struct LeftTab: View {
                 MyButton(text: "版本选择") {
                     dataManager.router.append(.versionSelect)
                 }
-                if AppSettings.shared.defaultInstance != nil {
+                .keyboardShortcut("l", modifiers: .command)
+                if instance != nil {
                     MyButton(text: "版本设置") {
                         if let instance = self.instance {
                             dataManager.router.append(.versionSettings(instance: instance))
@@ -88,12 +94,33 @@ fileprivate struct LeftTab: View {
         }
         .frame(width: 300)
         .foregroundStyle(Color(hex: 0x343D4A))
-        .onAppear {
-            if let directory = AppSettings.shared.currentMinecraftDirectory,
-               let defaultInstance = AppSettings.shared.defaultInstance,
-               let instance = MinecraftInstance.create(directory, directory.versionsURL.appending(path: defaultInstance)) {
-                self.instance = instance
+        .task(id: AppSettings.shared.defaultInstance) {
+            // MinecraftInstance.create 要读配置、解析清单（可能沿 inheritsFrom 递归），
+            // 放到后台，避免侧栏出现时卡一下主线程。
+            let directory = AppSettings.shared.currentMinecraftDirectory
+            let name = AppSettings.shared.defaultInstance
+            guard let directory, let name else {
+                self.instance = nil
+                return
             }
+            let resolved = await Task.detached(priority: .userInitiated) {
+                MinecraftInstance.create(directory, directory.versionsURL.appending(path: name))
+            }.value
+            self.instance = resolved
+        }
+    }
+
+    /// 启动游戏。isLaunching 期间禁止重复触发。
+    private func launch(_ instance: MinecraftInstance) {
+        guard !isLaunching else { return }
+        isLaunching = true
+        let launchOptions: LaunchOptions = .init()
+
+        Task {
+            defer { isLaunching = false }
+            guard await launchPrecheck(launchOptions) else { return }
+            debug("正在启动游戏")
+            await instance.launch(launchOptions)
         }
     }
     
@@ -131,6 +158,8 @@ fileprivate struct LeftTab: View {
                 }
             }
         }
+
+        guard await nativeCompatibilityPrecheck(instance!) else { return false }
         
         if case .failure(let error) = LaunchPrecheck.checkAccount(instance!, launchOptions) {
             switch error {
@@ -158,6 +187,85 @@ fileprivate struct LeftTab: View {
         }
             
         return true
+    }
+
+    private func nativeCompatibilityPrecheck(_ instance: MinecraftInstance) async -> Bool {
+        let configuredJava: URL? = instance.config.javaURL
+        let javaArchitecture = configuredJava.map { Architecture.getArchOfFile($0) } ?? .system
+        let targetArchitecture: Architecture = switch javaArchitecture {
+        case .unknown, .fatFile: .system
+        default: javaArchitecture
+        }
+        do {
+            let scanned = try await NativeCompatibilityService.shared.analyze(
+                instance: instance,
+                targetArchitecture: targetArchitecture
+            )
+            let pendingDisableIDs = Set(scanned.issues.filter {
+                $0.autoFixEligible && $0.action == .disableMod && !$0.isApplied
+            }.map(\.id))
+            let pendingOfficialArtifactIDs = Set(scanned.issues.filter {
+                $0.autoFixEligible && $0.action == .installOfficialArtifact && !$0.isApplied
+            }.map(\.id))
+            let report = try await NativeCompatibilityService.shared.applyTrustedFixes(report: scanned)
+            let newlyDisabled = report.issues.filter {
+                pendingDisableIDs.contains($0.id) && $0.isApplied
+            }
+
+            if !newlyDisabled.isEmpty {
+                let names = newlyDisabled.prefix(8).map { "• \($0.modName)" }.joined(separator: "\n")
+                let overflow = newlyDisabled.count > 8 ? "\n以及另外 \(newlyDisabled.count - 8) 个" : ""
+                _ = await PopupManager.shared.showAsync(.init(
+                    .normal,
+                    "已隔离 Windows-only Mod",
+                    "这些 Mod 已改名为 .jar.disabled，不会在 macOS 中加载：\n\n\(names)\(overflow)\n\n可在版本设置的 Mod 页面查看原因或恢复。",
+                    [.ok]
+                ))
+            }
+
+            let newlyCompleted = report.issues.filter {
+                pendingOfficialArtifactIDs.contains($0.id) && $0.isApplied
+            }
+            if !newlyCompleted.isEmpty {
+                let names = newlyCompleted.prefix(8).map { "• \($0.modName)" }.joined(separator: "\n")
+                let overflow = newlyCompleted.count > 8 ? "\n以及另外 \(newlyCompleted.count - 8) 个" : ""
+                _ = await PopupManager.shared.showAsync(.init(
+                    .normal,
+                    "已补全官方 Mac 组件",
+                    "已按同一 Mod、同一版本及精确 SHA-256 安装官方原生依赖：\n\n\(names)\(overflow)",
+                    [.ok]
+                ))
+            }
+
+            let unresolved = report.unacknowledgedIssues
+            guard !unresolved.isEmpty else { return true }
+            let names = unresolved.prefix(6).map { "• \($0.modName)：\($0.reason)" }.joined(separator: "\n")
+            let overflow = unresolved.count > 6 ? "\n以及另外 \(unresolved.count - 6) 个" : ""
+            let button = await PopupManager.shared.showAsync(.init(
+                .normal,
+                "发现待确认的原生组件",
+                "以下项目可能影响 Mac 启动，但证据不足，因此没有自动停用：\n\n\(names)\(overflow)",
+                [
+                    .init(label: "仍然启动", style: .normal),
+                    .init(label: "返回检查", style: .accent)
+                ]
+            ))
+            if button == 0 {
+                try await NativeCompatibilityService.shared.acknowledge(
+                    issueIDs: unresolved.map(\.id),
+                    instance: instance
+                )
+                return true
+            }
+            return false
+        } catch {
+            // A diagnostic failure must not masquerade as a game failure. Keep
+            // the launch available and retry next time, while leaving evidence
+            // in the launcher log.
+            warn("启动前 Mac 原生兼容性检查失败：\(error.localizedDescription)")
+            hint("Mac 原生兼容性检查暂未完成，已保留启动", .critical)
+            return true
+        }
     }
 }
 
@@ -238,11 +346,14 @@ struct LaunchView: View {
         }
     }
     
+    /// 日志等级标签的正则。编译一次复用 —— 原来每渲染一行日志都新建一个
+    /// NSRegularExpression，日志卡最多 200 行，等于每帧编译 200 次正则。
+    private static let logLevelRegex = try? NSRegularExpression(pattern: #"\[(INFO|WARN|ERROR|DEBUG)\]"#)
+
     @ViewBuilder
     func logLineView(_ line: String) -> some View {
-        let regex = #"\[(INFO|WARN|ERROR|DEBUG)\]"#
         let nsLine = line as NSString
-        if let match = try? NSRegularExpression(pattern: regex)
+        if let match = LaunchView.logLevelRegex?
             .firstMatch(in: line, range: NSRange(location: 0, length: nsLine.length)),
            let levelRange = Range(match.range(at: 1), in: line),
            let tagRange = Range(match.range(at: 0), in: line)

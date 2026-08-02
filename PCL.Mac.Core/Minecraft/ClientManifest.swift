@@ -27,7 +27,10 @@ public class ClientManifest {
         self.type = json["type"].stringValue
         self.assets = json["assets"].stringValue
         self.assetIndex = json["assetIndex"].exists() ? AssetIndex(json: json["assetIndex"]) : nil
-        self.libraries = json["libraries"].arrayValue.compactMap(Library.init(json:)).filter { $0.rules.isEmpty ? true : $0.rules.allSatisfy { $0.match() } }
+        // A Mojang library entry may contain both a normal classpath artifact
+        // and an OS native classifier. Keep both roles: collapsing the entry to
+        // one artifact drops java-objc-bridge classes on Minecraft 1.12.2.
+        self.libraries = json["libraries"].arrayValue.flatMap { Library.parse(json: $0) }
         self.arguments = json["arguments"].exists() ? Arguments(json: json["arguments"]) : nil
         self.minecraftArguments = json["minecraftArguments"].string
         self.javaVersion = json["javaVersion"]["majorVersion"].int
@@ -71,6 +74,11 @@ public class ClientManifest {
         }
     }
 
+    public enum LibraryRole: String, Codable, Sendable {
+        case classpath
+        case native
+    }
+
     public class Library: Hashable {
         public var name: String {
             didSet {
@@ -85,51 +93,86 @@ public class ClientManifest {
         public let rules: [Rule]
         public let natives: [String: String]
         public let artifact: DownloadInfo?
-        public let isNativeLibrary: Bool
+        public let role: LibraryRole
+        public var isNativeLibrary: Bool { role == .native }
 
-        public init?(json: JSON) {
-            self.name = json["name"].stringValue
-            self.split = name.split(separator: ":").map(String.init)
-            if split.isEmpty {
-                return nil
-            }
-            
+        private init?(name: String, rules: [Rule], natives: [String: String], artifact: DownloadInfo?, role: LibraryRole) {
+            let split = name.split(separator: ":").map(String.init)
+            guard split.count >= 3 else { return nil }
+            self.name = name
+            self.split = split
+            self.rules = rules
+            self.natives = natives
+            self.artifact = artifact
+            self.role = role
+        }
+
+        public static func parse(json: JSON) -> [Library] {
+            let name = json["name"].stringValue
+            let split = name.split(separator: ":").map(String.init)
+            guard split.count >= 3 else { return [] }
+
+            let rules = json["rules"].arrayValue.map { Rule(json: $0) }
+            let natives = json["natives"].dictionaryObject as? [String: String] ?? [:]
+
             if !json["downloads"].exists() {
-                self.rules = []
-                self.natives = [:]
                 let path = Util.toPath(mavenCoordinate: name)
-                self.artifact = DownloadInfo(
-                    path: path,
-                    url: (URL(string: json["url"].stringValue) ?? URL(string: "https://bmclapi2.bangbang93.com/maven")!).appending(path: path).absoluteString
-                )
-            } else {
-                if split[1] == "launchwrapper" {
-                    self.rules = []
-                    self.natives = [:]
-                    let path = Util.toPath(mavenCoordinate: name)
-                    self.artifact = DownloadInfo(path: path, url: URL(string: "https://libraries.minecraft.net")!.appending(path: path).absoluteString)
-                } else {
-                    self.rules = json["rules"].arrayValue.map { Rule(json: $0) }
-                    self.natives = json["natives"].dictionaryObject as? [String: String] ?? [:]
-                    
-                    if let classifiers = json["downloads"]["classifiers"].dictionary,
-                       let key = natives["osx"]?.replacingOccurrences(of: "${arch}", with: "64"),
-                       let json = classifiers[key] {
-                        self.artifact = DownloadInfo(json: json)
-                        self.isNativeLibrary = true
-                        return
-                    } else {
-                        self.artifact = json["downloads"]["artifact"].exists() ? DownloadInfo(json: json["downloads"]["artifact"]) : nil
-                    }
-                }
+                let baseURL = URL(string: json["url"].stringValue)
+                    ?? URL(string: "https://bmclapi2.bangbang93.com/maven")!
+                return [Library(
+                    name: name,
+                    rules: rules,
+                    natives: natives,
+                    artifact: DownloadInfo(path: path, url: baseURL.appending(path: path).absoluteString),
+                    role: .classpath
+                )].compactMap { $0 }
             }
-            
-            self.isNativeLibrary = false
+
+            if split[1] == "launchwrapper" {
+                let path = Util.toPath(mavenCoordinate: name)
+                return [Library(
+                    name: name,
+                    rules: rules,
+                    natives: natives,
+                    artifact: DownloadInfo(path: path, url: URL(string: "https://libraries.minecraft.net")!.appending(path: path).absoluteString),
+                    role: .classpath
+                )].compactMap { $0 }
+            }
+
+            var result: [Library] = []
+            if json["downloads"]["artifact"].exists(),
+               let library = Library(
+                name: name,
+                rules: rules,
+                natives: natives,
+                artifact: DownloadInfo(json: json["downloads"]["artifact"]),
+                role: .classpath
+               ) {
+                result.append(library)
+            }
+
+            if let classifiers = json["downloads"]["classifiers"].dictionary,
+               let classifierKey = natives["osx"]?.replacingOccurrences(of: "${arch}", with: "64"),
+               let classifierJSON = classifiers[classifierKey],
+               let library = Library(
+                name: name,
+                rules: rules,
+                natives: natives,
+                artifact: DownloadInfo(json: classifierJSON),
+                role: .native
+               ) {
+                result.append(library)
+            }
+            return result
         }
         
-        public static func == (lhs: Library, rhs: Library) -> Bool { lhs.name == rhs.name }
+        public static func == (lhs: Library, rhs: Library) -> Bool {
+            lhs.name == rhs.name && lhs.role == rhs.role && lhs.artifact?.path == rhs.artifact?.path
+        }
         public func hash(into hasher: inout Hasher) {
             hasher.combine(name)
+            hasher.combine(role)
+            hasher.combine(artifact?.path)
         }
     }
 
@@ -147,18 +190,18 @@ public class ClientManifest {
             self.jvm = jvm
         }
         
-        public func getAllowedGameArguments() -> [String] {
-            let filtered = game.filter { $0.match() }
+        public func getAllowedGameArguments(targetArchitecture: Architecture = .system) -> [String] {
+            let filtered = game.filter { $0.match(targetArchitecture: targetArchitecture) }
             var arguments: [String] = []
             for arg in filtered {
-                arguments.append(contentsOf: arg.values())
+                arguments.append(contentsOf: arg.values(targetArchitecture: targetArchitecture))
             }
             return arguments
         }
-        public func getAllowedJVMArguments() -> [String] {
-            let filtered = jvm.filter { $0.match() }
+        public func getAllowedJVMArguments(targetArchitecture: Architecture = .system) -> [String] {
+            let filtered = jvm.filter { $0.match(targetArchitecture: targetArchitecture) }
             var arguments: [String] = []
-            for arg in filtered { arguments.append(contentsOf: arg.values()) }
+            for arg in filtered { arguments.append(contentsOf: arg.values(targetArchitecture: targetArchitecture)) }
             return arguments
         }
 
@@ -170,10 +213,12 @@ public class ClientManifest {
                 if let str = json.string { string = str; rules = nil }
                 else { string = nil; rules = RuleTag(json: json) }
             }
-            public func match() -> Bool { rules?.match() ?? true }
-            public func values() -> [String] {
+            public func match(targetArchitecture: Architecture = .system) -> Bool {
+                rules?.match(targetArchitecture: targetArchitecture) ?? true
+            }
+            public func values(targetArchitecture: Architecture = .system) -> [String] {
                 if let string { return [string] }
-                if let rules, rules.match() { return rules.value }
+                if let rules, rules.match(targetArchitecture: targetArchitecture) { return rules.value }
                 return []
             }
         }
@@ -186,10 +231,12 @@ public class ClientManifest {
                 if let str = json.string { string = str; rules = nil }
                 else { string = nil; rules = RuleTag(json: json) }
             }
-            public func match() -> Bool { rules?.match() ?? true }
-            public func values() -> [String] {
+            public func match(targetArchitecture: Architecture = .system) -> Bool {
+                rules?.match(targetArchitecture: targetArchitecture) ?? true
+            }
+            public func values(targetArchitecture: Architecture = .system) -> [String] {
                 if let string { return [string] }
-                if let rules, rules.match() { return rules.value }
+                if let rules, rules.match(targetArchitecture: targetArchitecture) { return rules.value }
                 return []
             }
         }
@@ -207,8 +254,8 @@ public class ClientManifest {
                     value = []
                 }
             }
-            public func match() -> Bool {
-                rules.allSatisfy { $0.match() }
+            public func match(targetArchitecture: Architecture = .system) -> Bool {
+                Rule.evaluate(rules, targetArchitecture: targetArchitecture)
             }
         }
     }
@@ -222,8 +269,23 @@ public class ClientManifest {
             os = json["os"].exists() ? OSRule(json: json["os"]) : nil
             features = json["features"].exists() ? Features(json: json["features"]) : nil
         }
-        public func match() -> Bool {
-            (os?.match() ?? true) && (features?.match() ?? true) && action == "allow"
+        public func conditionsMatch(targetArchitecture: Architecture = .system) -> Bool {
+            (os?.match(targetArchitecture: targetArchitecture) ?? true) && (features?.match() ?? true)
+        }
+
+        /// Mojang rules are ordered. Matching rules update the current state;
+        /// a later disallow must be able to override an earlier allow.
+        public static func evaluate(_ rules: [Rule], targetArchitecture: Architecture = .system) -> Bool {
+            guard !rules.isEmpty else { return true }
+            var allowed = false
+            for rule in rules where rule.conditionsMatch(targetArchitecture: targetArchitecture) {
+                allowed = rule.action == "allow"
+            }
+            return allowed
+        }
+
+        public func match(targetArchitecture: Architecture = .system) -> Bool {
+            conditionsMatch(targetArchitecture: targetArchitecture) && action == "allow"
         }
         public class OSRule {
             public let name: String?
@@ -232,9 +294,20 @@ public class ClientManifest {
                 name = json["name"].string
                 arch = json["arch"].string
             }
-            public func match() -> Bool {
+            public func match(targetArchitecture: Architecture = .system) -> Bool {
                 if let name, name != "osx" { return false }
-                // TODO: 处理 arch
+                if let arch {
+                    let candidates: [String]
+                    switch targetArchitecture {
+                    case .arm64: candidates = ["arm64", "aarch64"]
+                    case .x64: candidates = ["x86_64", "amd64", "x64", "x86"]
+                    case .fatFile: candidates = ["arm64", "aarch64", "x86_64", "amd64", "x64", "x86"]
+                    case .unknown: candidates = []
+                    }
+                    guard candidates.contains(where: { candidate in
+                        candidate.range(of: arch, options: .regularExpression) != nil
+                    }) else { return false }
+                }
                 return true
             }
         }
@@ -304,9 +377,6 @@ public class ClientManifest {
     }
     
     public static func deduplicateLibraries(_ manifest: ClientManifest) {
-        // 修正 libraries
-        ArtifactVersionMapper.map(manifest, arch: .x64)
-        
         var librarySet: Set<HashableLibrary> = .init()
         manifest.libraries = manifest.libraries.filter { librarySet.insert(.init($0)).inserted }
     }
@@ -323,20 +393,19 @@ public class ClientManifest {
         return parent
     }
 
-    public func getNeededLibraries() -> [Library] {
-        getAllowedLibraries().filter { !$0.isNativeLibrary }
+    public func getNeededLibraries(for targetArchitecture: Architecture = .system) -> [Library] {
+        getAllowedLibraries(for: targetArchitecture).filter { $0.role == .classpath }
     }
     
-    public func getAllowedLibraries() -> [Library] { libraries }
+    public func getAllowedLibraries(for targetArchitecture: Architecture = .system) -> [Library] {
+        libraries.filter { Rule.evaluate($0.rules, targetArchitecture: targetArchitecture) }
+    }
     
-    public func getNeededNatives() -> [Library: DownloadInfo] {
-        var result: [Library: DownloadInfo] = [:]
-        for library in getAllowedLibraries() {
-            if library.isNativeLibrary {
-                result[library] = library.artifact
-            }
+    public func getNeededNatives(for targetArchitecture: Architecture = .system) -> [(Library, DownloadInfo)] {
+        getAllowedLibraries(for: targetArchitecture).compactMap { library in
+            guard library.role == .native, let artifact = library.artifact else { return nil }
+            return (library, artifact)
         }
-        return result
     }
     
     public func getArguments() -> Arguments {
@@ -369,12 +438,14 @@ public class ClientManifest {
             lhs.library.groupId == rhs.library.groupId
             && lhs.library.artifactId == rhs.library.artifactId
             && lhs.library.classifier == rhs.library.classifier
+            && lhs.library.role == rhs.library.role
         }
         
         func hash(into hasher: inout Hasher) {
             hasher.combine(library.groupId)
             hasher.combine(library.artifactId)
             hasher.combine(library.classifier)
+            hasher.combine(library.role)
         }
     }
 }

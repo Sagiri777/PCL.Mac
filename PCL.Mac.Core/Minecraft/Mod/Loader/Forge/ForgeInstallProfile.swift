@@ -16,7 +16,7 @@ public struct ForgeInstallProfile {
     public init(json: JSON) {
         self.data = json["data"].dictionaryValue.mapValues { $0["client"].stringValue }
         self.processors = json["processors"].arrayValue.map(Processor.init(json:))
-        self.libraries = json["libraries"].arrayValue.compactMap(ClientManifest.Library.init(json:))
+        self.libraries = json["libraries"].arrayValue.flatMap(ClientManifest.Library.parse(json:))
     }
     
     public struct Processor {

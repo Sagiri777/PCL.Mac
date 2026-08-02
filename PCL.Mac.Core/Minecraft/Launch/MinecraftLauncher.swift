@@ -44,25 +44,54 @@ public class MinecraftLauncher {
             let pipe = Pipe()
             process.standardOutput = pipe
             process.standardError = pipe
-            
+
             let logHandle = try FileHandle(forWritingTo: logURL)
+            try logHandle.seekToEnd()
             pipe.fileHandleForReading.readabilityHandler = { handle in
-                for line in String(data: handle.availableData, encoding: .utf8)!.split(separator: "\n") {
-                    raw(line.replacing("\t", with: "    "))
-                    try? logHandle.write(contentsOf: (line + "\n").data(using: .utf8)!)
-                    logHandle.seekToEndOfFile()
+                let data = handle.availableData
+                guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
+
+                // 整块一次写盘。之前是逐行 write + seekToEndOfFile，
+                // Minecraft 启动时的日志洪峰下这就是每行一次系统调用。
+                var buffer = ""
+                for line in text.split(separator: "\n") {
+                    let normalized = line.replacing("\t", with: "    ")
+                    raw(normalized)
+                    buffer += normalized + "\n"
+                }
+                if !buffer.isEmpty {
+                    try? logHandle.write(contentsOf: Data(buffer.utf8))
                 }
             }
-            
+
+            // 进程退出走 terminationHandler，不再用 waitUntilExit()。
+            // waitUntilExit 会把当前线程占满整局游戏时长；它是从 SwiftUI 的 Task
+            // 里调过来的，也就是长期霸占一个 Swift 并发协作线程池的线程。
+            process.terminationHandler = { [weak instance] finished in
+                pipe.fileHandleForReading.readabilityHandler = nil
+                try? logHandle.close()
+
+                let status = finished.terminationStatus
+                log("\(self.instance.name) 进程已退出, 退出代码 \(status)")
+                if status == 0 {
+                    debug("检测到退出代码为 0，已删除日志")
+                    try? FileManager.default.removeItem(at: self.logURL)
+                }
+                Task { @MainActor in
+                    instance?.process = nil
+                    callback(status)
+                }
+            }
+
             try process.run()
-            
+
             Task { // 轮询判断窗口是否出现
                 while process.isRunning {
                     let options = CGWindowListOption(arrayLiteral: .excludeDesktopElements, .optionOnScreenOnly)
                     guard let windowInfoList = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
-                        throw NSError()
+                        return
                     }
-                    
+
                     for info in windowInfoList {
                         if let windowPID = info["kCGWindowOwnerPID"] as? Int32,
                            windowPID == process.processIdentifier {
@@ -70,21 +99,11 @@ public class MinecraftLauncher {
                             return
                         }
                     }
-                    try await Task.sleep(for: .seconds(1))
+                    try? await Task.sleep(for: .seconds(1))
                 }
             }
-            
-            process.waitUntilExit()
-            log("\(instance.name) 进程已退出, 退出代码 \(process.terminationStatus)")
-            if process.terminationStatus == 0 {
-                debug("检测到退出代码为 0，已删除日志")
-                try? FileManager.default.removeItem(at: self.logURL)
-            }
-            DispatchQueue.main.async {
-                callback(process.terminationStatus)
-            }
-            instance.process = nil
         } catch {
+            instance.process = nil
             err(error.localizedDescription)
         }
     }
@@ -107,7 +126,7 @@ public class MinecraftLauncher {
         ]
         
         args.insert(contentsOf: options.yggdrasilArguments, at: 0)
-        args.append(contentsOf: instance.manifest.getArguments().getAllowedJVMArguments())
+        args.append(contentsOf: instance.manifest.getArguments().getAllowedJVMArguments(targetArchitecture: targetArchitecture))
         
         return Util.replaceTemplateStrings(args, with: values)
     }
@@ -117,7 +136,7 @@ public class MinecraftLauncher {
         ClientManifest.deduplicateLibraries(instance.manifest)
         
         var urls: [URL] = []
-        for library in instance.manifest.getNeededLibraries() {
+        for library in instance.manifest.getNeededLibraries(for: targetArchitecture) {
             if let artifact = library.artifact {
                 urls.append(instance.minecraftDirectory.librariesURL.appending(path: artifact.path))
             }
@@ -146,7 +165,14 @@ public class MinecraftLauncher {
             args.append("--demo")
         }
         
-        return Util.replaceTemplateStrings(instance.manifest.getArguments().getAllowedGameArguments(), with: values).union(args)
+        return Util.replaceTemplateStrings(
+            instance.manifest.getArguments().getAllowedGameArguments(targetArchitecture: targetArchitecture),
+            with: values
+        ).union(args)
+    }
+
+    private var targetArchitecture: Architecture {
+        instance.isUsingRosetta ? .x64 : (Architecture.system == .arm64 ? .arm64 : .x64)
     }
     
     public static func downloadAuthlibInjector() async throws {

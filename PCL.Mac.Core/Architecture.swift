@@ -24,7 +24,16 @@ public enum Architecture {
         }
     }
     
+    /// 读取文件架构（带缓存）。
+    ///
+    /// 这个方法在 Java 搜索、启动前检查、启动时映射 artifact，以及 natives 目录里
+    /// 每个 dylib 上都会被调用，原本每次都要开 FileHandle 读 Mach-O 头。
+    /// 缓存键包含修改时间与大小，文件被替换后自动失效。
     public static func getArchOfFile(_ executableURL: URL) -> Architecture {
+        archCache.value(for: executableURL) { readArchOfFile(executableURL) }
+    }
+
+    private static func readArchOfFile(_ executableURL: URL) -> Architecture {
         guard let fh = try? FileHandle(forReadingFrom: executableURL) else { return .unknown }
         defer { try? fh.close() }
         
@@ -69,6 +78,49 @@ public enum Architecture {
     }
     
     private static var _systemArch: Architecture? = nil
+    private static let archCache = ArchCache()
+
+    /// 线程安全的 (路径, mtime, size) → 架构缓存。
+    private final class ArchCache {
+        private struct Key: Hashable {
+            let path: String
+            let modified: TimeInterval
+            let size: Int
+        }
+
+        private let lock = NSLock()
+        private var storage: [Key: Architecture] = [:]
+
+        private func key(for url: URL) -> Key? {
+            guard let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey]) else {
+                return nil
+            }
+            return Key(
+                path: url.path,
+                modified: values.contentModificationDate?.timeIntervalSince1970 ?? 0,
+                size: values.fileSize ?? 0
+            )
+        }
+
+        func value(for url: URL, compute: () -> Architecture) -> Architecture {
+            guard let key = key(for: url) else { return compute() }
+
+            lock.lock()
+            let cached = storage[key]
+            lock.unlock()
+            if let cached { return cached }
+
+            let computed = compute()
+
+            lock.lock()
+            // 上限保护：natives 目录可能有上百个 dylib，不让缓存无限增长。
+            if storage.count > 512 { storage.removeAll(keepingCapacity: true) }
+            storage[key] = computed
+            lock.unlock()
+            return computed
+        }
+    }
+
     /// ARM64，Apple Silicon
     case arm64
     
