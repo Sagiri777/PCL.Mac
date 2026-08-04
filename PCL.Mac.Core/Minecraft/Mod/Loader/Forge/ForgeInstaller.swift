@@ -52,11 +52,11 @@ public class ForgeInstaller {
         values["SIDE"] = "client"
         values["INSTALLER"] = temp.root.appending(path: "installer.jar").path
         values["MINECRAFT_JAR"] = versionPath.appending(path: "\(versionPath.lastPathComponent).jar").path
-        values["MINECRAFT_VERSION"] = values["MINECRAFT_JAR"]!
+        values["MINECRAFT_VERSION"] = versionPath.appending(path: "\(versionPath.lastPathComponent).jar").path
         values["ROOT"] = minecraftDirectory.rootURL.path
         values["LIBRARY_DIR"] = minecraftDirectory.librariesURL.path
         
-        let step: Double = 0.1 / Double(installProfile.data.count)
+        let step: Double = 0.1 / Double(max(installProfile.data.count, 1))
         
         for (key, value) in installProfile.data {
             log("正在解析 \(key) 的值")
@@ -106,9 +106,12 @@ public class ForgeInstaller {
             "-cp", processor.classpath.map { minecraftDirectory.librariesURL.appending(path: $0).path }.joined(separator: ":"),
             mainClass
         ]
-        process.arguments!.append(contentsOf: processor.args.map(replaceWithValue(_:)))
+        process.arguments?.append(contentsOf: processor.args.map(replaceWithValue(_:)))
         try process.run()
         process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            throw MyLocalizedError(reason: "Forge 处理器执行失败（退出码 (process.terminationStatus)）")
+        }
     }
     
     // MARK: - 修改 DOWNLOAD_MOJMAPS 任务
@@ -125,11 +128,13 @@ public class ForgeInstaller {
         }
         
         // 下载 mappings
-        let url = clientMappingsDownload.url
+        guard let downloadURL = URL(string: clientMappingsDownload.url) else {
+            throw MyLocalizedError(reason: "Minecraft 客户端映射下载地址无效")
+        }
         let destination = URL(fileURLWithPath: replaceWithValue(processor.args[index + 1]))
         
-        try? FileManager.default.createDirectory(at: destination.parent(), withIntermediateDirectories: true)
-        try await SingleFileDownloader.download(url: url.url, destination: destination, replaceMethod: .replace)
+        try FileManager.default.createDirectory(at: destination.parent(), withIntermediateDirectories: true)
+        try await SingleFileDownloader.download(url: downloadURL, destination: destination, replaceMethod: .replace)
         debug("已修改 DOWNLOAD_MOJMAPS 任务")
         
         return true
@@ -142,7 +147,7 @@ public class ForgeInstaller {
         }
         
         let processors = installProfile.processors.filter { $0.isAvailableOnClient }
-        let step = 0.4 / Double(processors.count)
+        let step = 0.4 / Double(max(processors.count, 1))
         
         for processor in processors {
             if processor.args.contains("DOWNLOAD_MOJMAPS") {
@@ -151,7 +156,9 @@ public class ForgeInstaller {
                 }
             }
             if let index = processor.args.firstIndex(of: "--task") {
-                log("正在执行安装器 \(processor.args[index + 1])")
+                if index + 1 < processor.args.count {
+                    log("正在执行安装器 \(processor.args[index + 1])")
+                }
             }
             try executeProcessor(processor)
             await increaseProgress(step)
@@ -160,11 +167,16 @@ public class ForgeInstaller {
     
     // MARK: - 下载安装器
     private func downloadInstaller(minecraftVersion: MinecraftVersion, version: String) async throws {
+        guard !version.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw MyLocalizedError(reason: "Forge 版本不能为空")
+        }
         let installerPath = temp.getURL(path: "installer.jar")
         // 如果 CacheStorage 中不存在安装器，下载
         let name = "\(getGroupId()):installer:\(minecraftVersion.displayName)-\(version)"
         if !CacheStorage.default.copy(name: name, to: installerPath) {
-            let url = getInstallerDownloadURL(minecraftVersion, version)
+            guard let url = getInstallerDownloadURL(minecraftVersion, version) else {
+                throw MyLocalizedError(reason: "Forge 安装器下载地址无效")
+            }
             let dest = temp.getURL(path: "installer.jar")
             log("正在下载安装器 \(url.lastPathComponent)")
             try await SingleFileDownloader.download(url: url, destination: dest) { progress in
@@ -260,13 +272,13 @@ public class ForgeInstaller {
     }
     
     
-    func getInstallerDownloadURL(_ minecraftVersion: MinecraftVersion, _ version: String) -> URL {
-        return URL(string: "https://bmclapi2.bangbang93.com/forge/download"
+    func getInstallerDownloadURL(_ minecraftVersion: MinecraftVersion, _ version: String) -> URL? {
+        URL(string: "https://bmclapi2.bangbang93.com/forge/download"
             + "?mcversion=\(minecraftVersion.displayName)"
             + "&version=\(version)"
             + "&category=installer"
             + "&format=jar"
-        )!
+        )
     }
     
     func getGroupId() -> String { "net.minecraftforge" }

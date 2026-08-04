@@ -53,7 +53,7 @@ final class SpeedMeter: ObservableObject {
                 try? await Task.sleep(for: .seconds(1))
                 if Task.isCancelled { break }
                 guard let self else { break }
-                if await self.tick() { break }
+                if self.tick() { break }
             }
         }
     }

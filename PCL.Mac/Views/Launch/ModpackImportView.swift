@@ -14,6 +14,7 @@ final class ModpackImportManager: ObservableObject {
     enum Phase {
         case ready
         case importing
+        case awaitingOfficialDownloads
         case cancelling
         case success
         case failed(String)
@@ -40,6 +41,8 @@ final class ModpackImportManager: ObservableObject {
 
     private var worker: Task<Void, Never>?
     private var completedImports: [URL: URL] = [:]
+    private let officialWebDownloads = OfficialWebDownloadCoordinator.shared
+    private var canResumeOfficialWebDownloads = false
 
     var canEditSelection: Bool {
         if case .ready = phase { return true }
@@ -48,9 +51,13 @@ final class ModpackImportManager: ObservableObject {
 
     var isRunning: Bool {
         switch phase {
-        case .importing, .cancelling: true
+        case .importing, .awaitingOfficialDownloads, .cancelling: true
         default: false
         }
+    }
+
+    var hasOfficialWebDownloadQueue: Bool {
+        canResumeOfficialWebDownloads && recoveryInfo?.officialWebDownloadManifestURL != nil
     }
 
     func present(urls: [URL], directory: MinecraftDirectory, autoStart: Bool) {
@@ -84,7 +91,7 @@ final class ModpackImportManager: ObservableObject {
         panel.allowsMultipleSelection = true
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
-        panel.allowedContentTypes = [.zip, UTType(filenameExtension: "mrpack")!]
+        panel.allowedContentTypes = [.zip] + (UTType(filenameExtension: "mrpack").map { [$0] } ?? [])
         panel.prompt = "添加"
         if panel.runModal() == .OK {
             add(urls: panel.urls)
@@ -95,9 +102,11 @@ final class ModpackImportManager: ObservableObject {
         guard !urls.isEmpty, let directory, !isRunning else { return }
         phase = .importing
         recoveryInfo = nil
+        canResumeOfficialWebDownloads = false
         worker = Task { [weak self] in
             guard let self else { return }
             var activeURL: URL?
+            var shouldRetryAfterOfficialDownloads = false
             do {
                 for (index, url) in urls.enumerated() {
                     try Task.checkCancellation()
@@ -143,18 +152,11 @@ final class ModpackImportManager: ObservableObject {
                     statusText = "已取消导入，未完成的实例已清理"
                     phase = .cancelled
                 } else {
-                    if let failure = error as? ModpackImportFailure {
-                        currentStage = failure.stage
-                        finishedFiles = failure.completedFiles
-                        totalFiles = failure.totalFiles
-                    }
-                    if let activeURL {
-                        recoveryInfo = ModpackImporter.recoveryInfo(for: activeURL, in: directory)
-                    }
-                    statusText = recoveryInfo == nil
-                        ? "导入在 \(currentStage.title) 阶段停止"
-                        : "下载已暂停，现有文件和检查点均已保留"
-                    phase = .failed((error as? ModpackImportFailure)?.reason ?? error.localizedDescription)
+                    shouldRetryAfterOfficialDownloads = handleImportFailure(
+                        error,
+                        activeURL: activeURL,
+                        directory: directory
+                    )
                     err("整合包导入失败：\(error.localizedDescription)")
                 }
                 if let last = importedURLs.last {
@@ -163,11 +165,28 @@ final class ModpackImportManager: ObservableObject {
                 }
             }
             worker = nil
+            if shouldRetryAfterOfficialDownloads {
+                resumeImportAfterOfficialDownloads()
+            }
         }
     }
 
     func cancel() {
         guard isRunning else { return }
+        if case .awaitingOfficialDownloads = phase {
+            phase = .cancelling
+            statusText = "正在取消并清理未完成实例"
+            officialWebDownloads.pause()
+            worker?.cancel()
+            if let recoveryInfo {
+                ModpackImporter.discardIncompleteRecovery(at: recoveryInfo.instanceURL)
+            }
+            recoveryInfo = nil
+            canResumeOfficialWebDownloads = false
+            statusText = "已取消导入，未完成的实例已清理"
+            phase = .cancelled
+            return
+        }
         phase = .cancelling
         statusText = "正在取消并清理未完成实例"
         worker?.cancel()
@@ -184,13 +203,140 @@ final class ModpackImportManager: ObservableObject {
         start()
     }
 
+    func continueOfficialWebDownloads() {
+        guard !officialWebDownloads.isPresented else { return }
+        if openOfficialWebDownloadsIfPossible() {
+            resumeImportAfterOfficialDownloads()
+        }
+    }
+
     func revealRecoveryLocation() {
         guard let recoveryInfo else { return }
-        if let manualDownloadListURL = recoveryInfo.manualDownloadListURL {
-            NSWorkspace.shared.open(manualDownloadListURL)
-        } else {
-            NSWorkspace.shared.activateFileViewerSelecting([recoveryInfo.instanceURL])
+        NSWorkspace.shared.activateFileViewerSelecting([recoveryInfo.instanceURL])
+    }
+
+    private func handleImportFailure(
+        _ error: Error,
+        activeURL: URL?,
+        directory: MinecraftDirectory
+    ) -> Bool {
+        let failure = error as? ModpackImportFailure
+        if let failure {
+            currentStage = failure.stage
+            finishedFiles = failure.completedFiles
+            totalFiles = failure.totalFiles
         }
+        if let activeURL {
+            recoveryInfo = ModpackImporter.recoveryInfo(for: activeURL, in: directory)
+        }
+
+        if failure?.canBeginOfficialWebDownloads == true, recoveryInfo != nil {
+            return openOfficialWebDownloadsIfPossible()
+        }
+
+        if failure?.officialWebDownloadManifestURL != nil {
+            statusText = "自动下载暂时失败；官方网页下载队列已保留，继续重试会从当前下载恢复"
+        } else {
+            statusText = recoveryInfo == nil
+                ? "导入在 \(currentStage.title) 阶段停止"
+                : "下载已暂停，现有文件和检查点均已保留"
+        }
+        phase = .failed(failure?.reason ?? error.localizedDescription)
+        return false
+    }
+
+    /// Presents the nested official-page assistant if every queued file has a
+    /// trusted page, SHA-1 and instance-relative target. Returns true only
+    /// when all queue records are already validated and a normal retry should
+    /// continue immediately.
+    private func openOfficialWebDownloadsIfPossible() -> Bool {
+        guard let recoveryInfo,
+              let queueURL = recoveryInfo.officialWebDownloadManifestURL else {
+            statusText = "找不到可恢复的官方网页下载队列"
+            phase = .failed("受限 CurseForge 文件没有可恢复的官方网页下载队列。")
+            canResumeOfficialWebDownloads = false
+            return false
+        }
+
+        do {
+            let plan = try ModpackImporter.officialWebDownloadPlan(
+                queueURL: queueURL,
+                instanceRoot: recoveryInfo.instanceURL
+            )
+            refreshRecoveryInfoAfterQueueMigration()
+            guard plan.blocked.isEmpty else {
+                statusText = "官方网页下载已安全暂停"
+                phase = .failed(blockedQueueDescription(plan.blocked))
+                canResumeOfficialWebDownloads = false
+                return false
+            }
+            guard !plan.groups.isEmpty else {
+                statusText = "官方网页文件已验证，正在继续导入"
+                phase = .ready
+                canResumeOfficialWebDownloads = false
+                return true
+            }
+
+            let browserAutomationEnabled = AppSettings.shared.accessibilityBrowserAutomationDownloadEnabled
+            canResumeOfficialWebDownloads = true
+            currentStage = .files
+            statusText = browserAutomationEnabled
+                ? "正在使用无障碍浏览器自动化下载；完成后会自动继续"
+                : "请在 CurseForge 官方页面确认下载；完成后会自动继续"
+            phase = .awaitingOfficialDownloads
+            officialWebDownloads.present(
+                groups: plan.groups,
+                instanceRoot: recoveryInfo.instanceURL,
+                browserAutomationEnabled: browserAutomationEnabled
+            ) { [weak self] result in
+                self?.handleOfficialWebDownloadResult(result)
+            }
+        } catch {
+            statusText = "无法读取官方网页下载队列"
+            phase = .failed("无法恢复官方网页下载：\(error.localizedDescription)")
+            canResumeOfficialWebDownloads = false
+        }
+        return false
+    }
+
+    private func handleOfficialWebDownloadResult(_ result: Result<Void, Error>) {
+        guard case .awaitingOfficialDownloads = phase else { return }
+        switch result {
+        case .success:
+            canResumeOfficialWebDownloads = false
+            statusText = "官方网页文件已校验并归位，正在继续导入"
+            resumeImportAfterOfficialDownloads()
+        case let .failure(error):
+            // Closing the child sheet is a pause, not a cancellation. The
+            // manifest and checkpoint remain in the instance for a later run.
+            canResumeOfficialWebDownloads = true
+            statusText = error is OfficialWebDownloadError
+                ? "官方网页下载已暂停，已完成文件会保留"
+                : "官方网页下载暂时无法继续"
+            phase = .awaitingOfficialDownloads
+        }
+    }
+
+    private func resumeImportAfterOfficialDownloads() {
+        guard !officialWebDownloads.isPresented else { return }
+        canResumeOfficialWebDownloads = false
+        phase = .ready
+        resetProgress(preservingCompletedImports: true)
+        start()
+    }
+
+    private func refreshRecoveryInfoAfterQueueMigration() {
+        guard let directory,
+              urls.indices.contains(currentPackIndex) else { return }
+        recoveryInfo = ModpackImporter.recoveryInfo(for: urls[currentPackIndex], in: directory) ?? recoveryInfo
+    }
+
+    private func blockedQueueDescription(_ blocks: [OfficialWebDownloadBlock]) -> String {
+        let examples = blocks.prefix(3).map { block in
+            "\(block.record.fileName)（项目 \(block.record.projectID)，文件 \(block.record.fileID)）：\(block.reason.localizedDescription)"
+        }
+        let suffix = blocks.count > examples.count ? "\n另有 \(blocks.count - examples.count) 个文件。" : ""
+        return "无法安全开始官方网页下载：\n\(examples.joined(separator: "\n"))\(suffix)"
     }
 
     private func consume(_ update: ModpackImportProgressUpdate) {
@@ -226,6 +372,7 @@ final class ModpackImportManager: ObservableObject {
         finishedFiles = 0
         totalFiles = 0
         recoveryInfo = nil
+        canResumeOfficialWebDownloads = false
     }
 
     private func uniqueModpackURLs(_ input: [URL]) -> [URL] {
@@ -241,6 +388,7 @@ final class ModpackImportManager: ObservableObject {
 struct ModpackImportView: View {
     @ObservedObject var manager: ModpackImportManager
     @ObservedObject private var settings: AppSettings = .shared
+    @ObservedObject private var officialWebDownloads = OfficialWebDownloadCoordinator.shared
 
     var body: some View {
         VStack(spacing: 0) {
@@ -253,6 +401,9 @@ struct ModpackImportView: View {
         .frame(width: 680, height: 580)
         .background(Color("MyCardBackgroundColor"))
         .interactiveDismissDisabled(manager.isRunning)
+        .sheet(isPresented: $officialWebDownloads.isPresented) {
+            OfficialWebDownloadView(coordinator: officialWebDownloads)
+        }
     }
 
     private var header: some View {
@@ -448,6 +599,9 @@ struct ModpackImportView: View {
                 if case .failed(let message) = manager.phase {
                     failureMessage(message)
                 }
+                if case .awaitingOfficialDownloads = manager.phase {
+                    officialWebDownloadMessage
+                }
             }
             .padding(20)
         }
@@ -521,12 +675,12 @@ struct ModpackImportView: View {
                     Text(recoveryInfo.summary)
                         .font(.custom("PCL English", size: 12))
                         .foregroundStyle(Color(hex: 0x7F8790))
-                    if recoveryInfo.manualDownloadListURL != nil {
-                        Text("作者限制下载的文件已写入人工下载清单；放到清单标注的位置后点击继续重试。")
+                    if manager.hasOfficialWebDownloadQueue {
+                        Text("受限文件会在 CurseForge 官方页面由你确认下载；PCL.Mac 会自动校验、归位并继续导入。")
                             .font(.custom("PCL English", size: 11))
                             .foregroundStyle(Color(hex: 0x7F8790))
                     }
-                    Button(recoveryInfo.manualDownloadListURL == nil ? "在 Finder 中显示续传目录" : "打开人工下载清单") {
+                    Button("在 Finder 中显示续传目录") {
                         manager.revealRecoveryLocation()
                     }
                     .buttonStyle(.bordered)
@@ -537,6 +691,24 @@ struct ModpackImportView: View {
         }
         .padding(12)
         .background(Color(hex: 0xE5484D).opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+    }
+
+    private var officialWebDownloadMessage: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "globe")
+                .foregroundStyle(settings.theme.getTextStyle())
+            VStack(alignment: .leading, spacing: 5) {
+                Text("等待 CurseForge 官方页面下载")
+                    .font(.custom("PCL English", size: 13))
+                    .foregroundStyle(Color("TextColor"))
+                Text("请在网页中自行点击下载。下载完成后会经过 SHA-1 校验、自动归位，并继续应用 overrides 和实例校验。")
+                    .font(.custom("PCL English", size: 12))
+                    .foregroundStyle(Color(hex: 0x7F8790))
+            }
+            Spacer()
+        }
+        .padding(12)
+        .background(settings.theme.getAccentColor().opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
     }
 
     private var footer: some View {
@@ -559,6 +731,15 @@ struct ModpackImportView: View {
                 Spacer()
                 Button("取消导入", role: .destructive) { manager.cancel() }
                     .buttonStyle(.bordered)
+            case .awaitingOfficialDownloads:
+                Text("只接收你在官方页面手动触发的下载")
+                    .font(.custom("PCL English", size: 11))
+                    .foregroundStyle(Color(hex: 0x7F8790))
+                Spacer()
+                Button("取消导入", role: .destructive) { manager.cancel() }
+                    .buttonStyle(.bordered)
+                Button("打开官方页面") { manager.continueOfficialWebDownloads() }
+                    .buttonStyle(.borderedProminent)
             case .cancelling:
                 ProgressView()
                     .controlSize(.small)
@@ -576,8 +757,13 @@ struct ModpackImportView: View {
                 Spacer()
                 Button("关闭") { manager.close() }
                     .buttonStyle(.bordered)
-                Button(manager.recoveryInfo == nil ? "重试" : "继续重试") { manager.retry() }
-                    .buttonStyle(.borderedProminent)
+                if manager.hasOfficialWebDownloadQueue {
+                    Button("继续官方网页下载") { manager.continueOfficialWebDownloads() }
+                        .buttonStyle(.borderedProminent)
+                } else {
+                    Button(manager.recoveryInfo == nil ? "重试" : "继续重试") { manager.retry() }
+                        .buttonStyle(.borderedProminent)
+                }
             case .cancelled:
                 Text("导入已取消")
                     .font(.custom("PCL English", size: 12))
@@ -602,6 +788,7 @@ struct ModpackImportView: View {
         switch manager.phase {
         case .ready: "确认文件与实例位置"
         case .importing, .cancelling: "自动安装游戏、加载器与全部依赖"
+        case .awaitingOfficialDownloads: "等待你在官方页面确认下载"
         case .success: "实例已通过启动环境与 Mac 原生兼容检查"
         case .failed: "查看失败原因、续传状态并继续重试"
         case .cancelled: "未完成的实例已移除"
@@ -611,7 +798,7 @@ struct ModpackImportView: View {
     private var statusColor: AnyShapeStyle {
         switch manager.phase {
         case .failed: AnyShapeStyle(Color(hex: 0xE5484D))
-        case .success: settings.theme.getTextStyle()
+        case .success, .awaitingOfficialDownloads: settings.theme.getTextStyle()
         default: AnyShapeStyle(Color(hex: 0x7F8790))
         }
     }

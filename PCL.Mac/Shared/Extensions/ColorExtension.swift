@@ -9,15 +9,45 @@ import SwiftUI
 import AppKit
 
 class ColorConstants {
-    public static var colorScheme: ColorSchemeOption = .light
+    private static let stateLock = NSLock()
+    private static var storedColorScheme: ColorSchemeOption = .light
+    private static var cachedSystemIsLight = true
+
+    public static var colorScheme: ColorSchemeOption {
+        get {
+            stateLock.lock()
+            defer { stateLock.unlock() }
+            return storedColorScheme
+        }
+        set {
+            stateLock.lock()
+            storedColorScheme = newValue
+            stateLock.unlock()
+        }
+    }
     
     public static var isLight: Bool {
-        if colorScheme != .system {
-            return colorScheme == .light
+        let scheme = colorScheme
+        if scheme != .system {
+            return scheme == .light
         }
+
+        // Theme JSON 解析可能在后台线程执行。NSApp.effectiveAppearance 是
+        // AppKit UI 状态，只能在主线程读取；后台解析使用主线程最近一次快照，
+        // 避免 Main Thread Checker 报警，也避免主题刷新与窗口事件互相阻塞。
+        guard Thread.isMainThread else {
+            stateLock.lock()
+            defer { stateLock.unlock() }
+            return cachedSystemIsLight
+        }
+
         let appearance = NSApp.effectiveAppearance
         let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        return !isDark
+        let result = !isDark
+        stateLock.lock()
+        cachedSystemIsLight = result
+        stateLock.unlock()
+        return result
     }
     
     public static var L1: Double { isLight ? 25 : 96 }

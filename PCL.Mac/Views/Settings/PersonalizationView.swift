@@ -38,13 +38,13 @@ struct PersonalizationView: View {
                     OptionStack("自定义主题色") {
                         HStack(spacing: 12) {
                             Toggle("", isOn: $settings.customAccentColorEnabled)
-                                .onChange(of: settings.customAccentColorEnabled) { settings.refreshVisuals() }
+                                .onChange(of: settings.customAccentColorEnabled) { settings.refreshThemeAppearance() }
                             ColorPicker("", selection: customAccentBinding, supportsOpacity: false)
                                 .labelsHidden()
                                 .disabled(!settings.customAccentColorEnabled)
                             Button("恢复主题默认") {
                                 settings.customAccentColorEnabled = false
-                                settings.refreshVisuals()
+                                settings.refreshThemeAppearance()
                             }
                         }
                     }
@@ -176,12 +176,16 @@ struct PersonalizationView: View {
         )
     }
 
-    private func scheduleVisualRefresh() {
+    private func scheduleVisualRefresh(updateThemeStyle: Bool = false) {
         visualRefreshTask?.cancel()
         visualRefreshTask = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(70))
             guard !Task.isCancelled else { return }
-            settings.refreshVisuals()
+            if updateThemeStyle {
+                settings.refreshThemeAppearance()
+            } else {
+                settings.refreshVisuals()
+            }
         }
     }
 
@@ -206,7 +210,7 @@ struct PersonalizationView: View {
                     settings.customAccentGreen = Double(components.greenComponent)
                     settings.customAccentBlue = Double(components.blueComponent)
                     settings.customAccentColorEnabled = true
-                    scheduleVisualRefresh()
+                    scheduleVisualRefresh(updateThemeStyle: true)
                 }
             }
         )
@@ -228,6 +232,7 @@ struct PersonalizationView: View {
         settings.trafficLightPosition = .topLeft
         settings.trafficLightVisibility = .always
         settings.glassInteractiveEffects = true
+        settings.refreshVisuals()
         settings.refreshWindowConfiguration()
     }
 }

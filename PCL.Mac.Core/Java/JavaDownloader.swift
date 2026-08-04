@@ -10,7 +10,11 @@ import SwiftyJSON
 
 /// Azul Zulu Java 下载 / 搜索器
 public class JavaDownloader {
-    private static let zuluJavaPackageNameRegex = /zulu.*-ca-fx-(jdk|jre)[0-9.]+-macosx_(x64|aarch64)\.zip/
+    // Azul currently publishes both JavaFX and CRaC package variants.  Both
+    // are valid Java runtimes for the downloader; restricting this to the
+    // former made current CRaC metadata silently disappear from search
+    // results.
+    private static let zuluJavaPackageNameRegex = /zulu.*-ca-(?:fx|crac)-(jdk|jre)[0-9.]+-macosx_(x64|aarch64)\.zip/
     
     public static func search(
         version: String? = nil,
@@ -41,13 +45,17 @@ public class JavaDownloader {
             if let match = package["name"].stringValue.wholeMatch(of: JavaDownloader.zuluJavaPackageNameRegex) {
                 let type = String(match.1)
                 let arch = String(match.2)
+                guard let downloadURL = package["download_url"].url,
+                      !package["java_version"].arrayValue.isEmpty else {
+                    continue
+                }
                 
                 packages.append(JavaPackage(
                     name: String(package["name"].stringValue.dropLast(4)),
                     type: .init(rawValue: type) ?? .jre,
                     arch: .fromString(arch),
                     version: package["java_version"].arrayValue.map { $0.intValue },
-                    downloadURL: package["download_url"].url!
+                    downloadURL: downloadURL
                 ))
             }
         }
@@ -89,7 +97,10 @@ public class JavaInstallTask: InstallTask {
                 self.progress = 0.75
                 
                 
-                let javaDirectoryPath = temp.root.appending(path: package.name).appending(path: "zulu-\(package.version[0]).\(package.type.rawValue)")
+                guard let majorVersion = package.version.first else {
+                    throw MyLocalizedError(reason: "Java 下载响应缺少版本号")
+                }
+                let javaDirectoryPath = temp.root.appending(path: package.name).appending(path: "zulu-\(majorVersion).\(package.type.rawValue)")
                 if !FileManager.default.fileExists(atPath: javaDirectoryPath.path) {
                     throw MyLocalizedError(reason: "发生未知错误")
                 }

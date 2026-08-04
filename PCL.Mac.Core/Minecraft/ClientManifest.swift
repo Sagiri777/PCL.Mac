@@ -86,9 +86,9 @@ public class ClientManifest {
             }
         }
         private var split: [String]
-        public var groupId: String { split[0] }
-        public var artifactId: String { split[1] }
-        public var version: String { split[2] }
+        public var groupId: String { split.indices.contains(0) ? split[0] : "" }
+        public var artifactId: String { split.indices.contains(1) ? split[1] : "" }
+        public var version: String { split.indices.contains(2) ? split[2] : "" }
         public var classifier: String? { split.count >= 4 ? split[3] : nil }
         public let rules: [Rule]
         public let natives: [String: String]
@@ -117,8 +117,11 @@ public class ClientManifest {
 
             if !json["downloads"].exists() {
                 let path = Util.toPath(mavenCoordinate: name)
-                let baseURL = URL(string: json["url"].stringValue)
-                    ?? URL(string: "https://bmclapi2.bangbang93.com/maven")!
+                guard !path.isEmpty,
+                      let baseURL = URL(string: json["url"].stringValue)
+                        ?? URL(string: "https://bmclapi2.bangbang93.com/maven") else {
+                    return []
+                }
                 return [Library(
                     name: name,
                     rules: rules,
@@ -130,11 +133,14 @@ public class ClientManifest {
 
             if split[1] == "launchwrapper" {
                 let path = Util.toPath(mavenCoordinate: name)
+                guard !path.isEmpty, let baseURL = URL(string: "https://libraries.minecraft.net") else {
+                    return []
+                }
                 return [Library(
                     name: name,
                     rules: rules,
                     natives: natives,
-                    artifact: DownloadInfo(path: path, url: URL(string: "https://libraries.minecraft.net")!.appending(path: path).absoluteString),
+                    artifact: DownloadInfo(path: path, url: baseURL.appending(path: path).absoluteString),
                     role: .classpath
                 )].compactMap { $0 }
             }

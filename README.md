@@ -8,7 +8,7 @@
 
 ## 当前版本
 
-- Release: `v1.10.0`
+- Release: `v2.0.0`
 - 系统要求: macOS 14.0+
 - 构建产物: 分别面向 Apple Silicon（arm64）与 Intel Mac（x86_64）的 ad-hoc 签名 `.app` 压缩包
 
@@ -23,6 +23,7 @@
 - 支持拖入 `.mrpack` / 整合包 `.zip` 后创建实例。
 - 支持从资源下载页导入整合包。
 - 改进批量下载：并发下载、候选源切换、SHA1 校验与失败重试。
+- 支持默认关闭的无障碍浏览器自动化下载：开启后可为受限 CurseForge 队列自动打开已验证文件的官方下载页，仍需通过 SHA-1 校验后才会归位。
 - 导入整合包后自动刷新实例列表。
 - 支持 Modrinth、CurseForge、HMCL 与普通 `.minecraft/versions/...` 压缩包的基础识别/导入流程。
 

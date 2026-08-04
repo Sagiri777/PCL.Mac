@@ -47,10 +47,18 @@ public struct LiquidGlassBackground<S: InsettableShape>: View {
         self.shape = shape
     }
 
+    @ViewBuilder
     public var body: some View {
-        // 列表滚动中同时存在大量卡片时，逐卡片 glassEffect 会重复采样窗口后方。
-        // 使用系统 Material 保留磨砂与 tint；交互反馈由外层 hover/高光完成。
-        swiftUIMaterialFallback
+        // 卡片列表可能同时创建大量玻璃层，逐卡片采样会明显增加滚动成本。
+        // 窗口、侧栏和内容表面则使用 macOS 26 的原生实现；旧系统以及卡片
+        // 保持 Material 回退，保证 macOS 14+ 的行为和性能边界稳定。
+        Group {
+            if #available(macOS 26.0, *), role != .card {
+                nativeLiquidGlass
+            } else {
+                swiftUIMaterialFallback
+            }
+        }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }

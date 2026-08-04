@@ -40,9 +40,14 @@ struct Announcement: Identifiable {
                                 .foregroundStyle(color)
                                 .font(.custom("PCL English", size: CGFloat(fontSize)))
                         case .image(let base64):
-                            Image(nsImage: NSImage(data: Data(base64Encoded: base64, options:.ignoreUnknownCharacters)!)!)
-                                .resizable()
-                                .scaledToFit()
+                            if let data = Data(base64Encoded: base64, options: .ignoreUnknownCharacters),
+                               let image = NSImage(data: data) {
+                                Image(nsImage: image)
+                                    .resizable()
+                                    .scaledToFit()
+                            } else {
+                                EmptyView()
+                            }
                         }
                     }
 

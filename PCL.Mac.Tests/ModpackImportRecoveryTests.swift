@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import ZIPFoundation
 @testable import PCL_Mac
 
 struct ModpackImportRecoveryTests {
@@ -34,7 +35,15 @@ struct ModpackImportRecoveryTests {
         let instanceURL = directory.versionsURL.appending(path: "Closing Song1.6.5")
         try FileManager.default.createDirectory(at: instanceURL, withIntermediateDirectories: true)
         let manualURL = instanceURL.appending(path: ".PCL_Mac_manual_downloads.json")
-        try Data("{}".utf8).write(to: manualURL)
+        let legacyRecord = OfficialWebDownloadRecord(
+            projectID: 238222,
+            fileID: 1234567,
+            fileName: "example.jar",
+            destination: "mods/example.jar",
+            expectedSHA1: String(repeating: "a", count: 40),
+            curseForgePage: URL(string: "https://www.curseforge.com/minecraft/mc-mods/example")
+        )
+        try OfficialWebDownloadManifest(files: [legacyRecord]).write(to: manualURL)
 
         let checkpoint: [String: Any] = [
             "schemaVersion": 1,
@@ -61,8 +70,17 @@ struct ModpackImportRecoveryTests {
         #expect(recovery.instanceURL.resolvingSymlinksInPath() == instanceURL.resolvingSymlinksInPath())
         #expect(recovery.completedFiles == 246)
         #expect(recovery.totalFiles == 266)
-        #expect(recovery.manualDownloadListURL?.resolvingSymlinksInPath() == manualURL.resolvingSymlinksInPath())
+        #expect(recovery.officialWebDownloadManifestURL?.resolvingSymlinksInPath() == manualURL.resolvingSymlinksInPath())
         #expect(recovery.summary.contains("246 / 266"))
+
+        let plan = try ModpackImporter.officialWebDownloadPlan(
+            queueURL: manualURL,
+            instanceRoot: instanceURL
+        )
+        let upgradedURL = instanceURL.appending(path: ".PCL_Mac_official_web_downloads.json")
+        #expect(plan.groups.count == 1)
+        #expect(FileManager.default.fileExists(atPath: upgradedURL.path))
+        #expect(!FileManager.default.fileExists(atPath: manualURL.path))
     }
 
     @Test func failureNamesTheStageAndPreservedFileCount() throws {
@@ -130,6 +148,41 @@ struct ModpackImportRecoveryTests {
         }
 
         #expect(instances.isEmpty)
+    }
+
+    @Test func exporterSkipsSymlinkedFilesOutsideTheInstanceRoot() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let minecraftRoot = root.appending(path: "minecraft")
+        let instanceURL = minecraftRoot.appending(path: "versions/test")
+        let modsURL = minecraftRoot.appending(path: "mods")
+        try FileManager.default.createDirectory(at: instanceURL, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: modsURL, withIntermediateDirectories: true)
+
+        let manifest = """
+        {"id":"1.20.1","type":"release","mainClass":"net.minecraft.client.Main","libraries":[]}
+        """
+        try Data(manifest.utf8).write(to: instanceURL.appending(path: "test.json"))
+        try Data("inside".utf8).write(to: modsURL.appending(path: "inside.jar"))
+        let outsideURL = root.appending(path: "outside.jar")
+        try Data("outside".utf8).write(to: outsideURL)
+        try FileManager.default.createSymbolicLink(
+            at: modsURL.appending(path: "linked.jar"),
+            withDestinationURL: outsideURL
+        )
+
+        let directory = MinecraftDirectory(rootURL: minecraftRoot, name: "test")
+        let instance = try #require(MinecraftInstance.create(directory, instanceURL))
+        let destination = root.appending(path: "export.mrpack")
+        var options = ModpackExporter.Options(name: "test")
+        options.includeConfig = false
+        options.includeVersionJSON = false
+        try await ModpackExporter.export(instance: instance, options: options, to: destination)
+
+        let archive = try Archive(url: destination, accessMode: .read)
+        let paths = Set(archive.map(\.path))
+        #expect(paths.contains("overrides/mods/inside.jar"))
+        #expect(!paths.contains("overrides/mods/linked.jar"))
     }
 
     private func temporaryDirectory() -> URL {

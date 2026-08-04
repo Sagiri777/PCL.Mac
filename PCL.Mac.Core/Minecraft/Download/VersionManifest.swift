@@ -64,14 +64,22 @@ public class VersionManifest: Codable {
         /// 解析清单要构造上千个 GameVersion；ISO8601DateFormatter 的初始化并不便宜，
         /// 复用同一个实例（只在 init 内同步使用，不跨线程持有）。
         private static let iso8601Formatter = ISO8601DateFormatter()
+        private static let iso8601FormatterLock = NSLock()
+
+        private static func parseDate(_ value: String) -> Date? {
+            iso8601FormatterLock.lock()
+            defer { iso8601FormatterLock.unlock() }
+            return iso8601Formatter.date(from: value)
+        }
 
         public init(_ json: JSON) {
-            let formatter = GameVersion.iso8601Formatter
             self.id = json["id"].stringValue.replacing(" Pre-Release ", with: "-pre")
             self.type = .init(rawValue: json["type"].stringValue) ?? .release
             self.url = json["url"].stringValue
-            self.time = formatter.date(from: json["time"].stringValue)!
-            self.releaseTime = formatter.date(from: json["releaseTime"].stringValue)!
+            // 官方清单偶尔会包含实验条目或代理返回的损坏日期。日期只用于
+            // 排序和展示，使用最早日期比在后台刷新时直接终止整个应用安全。
+            self.time = GameVersion.parseDate(json["time"].stringValue) ?? .distantPast
+            self.releaseTime = GameVersion.parseDate(json["releaseTime"].stringValue) ?? .distantPast
             
             if VersionManifest.isAprilFoolVersion(self) {
                 self.type = .aprilFool
@@ -110,12 +118,12 @@ public class VersionManifest: Codable {
         }
     }
     
-    public func getLatestRelease() -> GameVersion {
-        return self.version(id: self.latest.release)!
+    public func getLatestRelease() -> GameVersion? {
+        self.version(id: self.latest.release)
     }
 
-    public func getLatestSnapshot() -> GameVersion {
-        return self.version(id: self.latest.snapshot)!
+    public func getLatestSnapshot() -> GameVersion? {
+        self.version(id: self.latest.snapshot)
     }
 
     public static func getReleaseDate(_ version: MinecraftVersion) -> Date? {

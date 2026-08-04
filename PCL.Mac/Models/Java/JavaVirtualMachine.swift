@@ -88,7 +88,13 @@ public class JavaVirtualMachine: Identifiable, Equatable {
                 let release = PropertiesParser.parse(fileURL: releaseURL)
                 if let javaVersion = release["JAVA_VERSION"] {
                     displayVersion = javaVersion
-                    version = Int(displayVersion.split(separator: ".")[displayVersion.starts(with: "1.") ? 1 : 0])!
+                    let components = displayVersion.split(separator: ".")
+                    let majorIndex = displayVersion.starts(with: "1.") ? 1 : 0
+                    if components.indices.contains(majorIndex), let parsedVersion = Int(components[majorIndex]) {
+                        version = parsedVersion
+                    } else {
+                        err("加载 \(executableURL.path()) 时出现错误: JAVA_VERSION 格式无效")
+                    }
                 } else {
                     err("加载 \(executableURL.path()) 时出现错误: 未找到键 JAVA_VERSION 对应的值")
                 }

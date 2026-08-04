@@ -93,13 +93,13 @@ public enum ModpackExporter {
         // 2. 写入 manifest（压缩包无 manifest）。
         switch options.format {
         case .modrinth:
-            let manifest = buildModrinthManifest(instance: instance, options: options, files: contentFiles, loaderInfo: loaderInfo)
+            let manifest = try buildModrinthManifest(instance: instance, options: options, files: contentFiles, loaderInfo: loaderInfo)
             try addData(manifest, as: "modrinth.index.json", into: archive)
         case .curseforge:
-            let manifest = buildCurseForgeManifest(instance: instance, options: options, loaderInfo: loaderInfo)
+            let manifest = try buildCurseForgeManifest(instance: instance, options: options, loaderInfo: loaderInfo)
             try addData(manifest, as: "manifest.json", into: archive)
         case .hmcl:
-            let manifest = buildHMCLManifest(instance: instance, options: options, loaderInfo: loaderInfo)
+            let manifest = try buildHMCLManifest(instance: instance, options: options, loaderInfo: loaderInfo)
             try addData(manifest, as: "manifest.json", into: archive)
         case .compress:
             break
@@ -136,14 +136,16 @@ public enum ModpackExporter {
         if options.includeVersionJSON {
             // 对应 PCL2“整合包配置文件”：连同版本 JSON 一起带出，便于他人复现。
             let versionJSON = instance.runningDirectory.appendingPathComponent("\(instance.name).json")
-            if fm.fileExists(atPath: versionJSON.path) {
+            if fm.fileExists(atPath: versionJSON.path),
+               isSafeArchivePath("versions/\(instance.name)/\(instance.name).json") {
                 out.append(ContentFile(
                     relativePath: "versions/\(instance.name)/\(instance.name).json",
                     absoluteURL: versionJSON
                 ))
             }
             let versionJar = instance.runningDirectory.appendingPathComponent("\(instance.name).jar")
-            if fm.fileExists(atPath: versionJar.path) {
+            if fm.fileExists(atPath: versionJar.path),
+               isSafeArchivePath("versions/\(instance.name)/\(instance.name).jar") {
                 out.append(ContentFile(
                     relativePath: "versions/\(instance.name)/\(instance.name).jar",
                     absoluteURL: versionJar
@@ -159,12 +161,16 @@ public enum ModpackExporter {
             return []
         }
         var out: [ContentFile] = []
+        let resolvedRoot = root.resolvingSymlinksInPath().standardizedFileURL.path
         for case let url as URL in enumerator {
             guard let isRegular = try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile, isRegular else { continue }
+            let resolvedURL = url.resolvingSymlinksInPath().standardizedFileURL
+            guard resolvedURL.path.hasPrefix(resolvedRoot + "/") else { continue }
             // 排除被禁用的 mod（如 mods/.disabled/ 之类）。
-            let rel = url.path.replacingOccurrences(of: root.path + "/", with: "")
+            let rel = String(resolvedURL.path.dropFirst(resolvedRoot.count + 1))
+            guard isSafeArchivePath(rel) else { continue }
             if excludes.contains(where: { rel.contains($0) }) { continue }
-            out.append(ContentFile(relativePath: rel, absoluteURL: url))
+            out.append(ContentFile(relativePath: rel, absoluteURL: resolvedURL))
         }
         return out
     }
@@ -206,7 +212,7 @@ public enum ModpackExporter {
 
     // MARK: - Manifest 构造
 
-    private static func buildModrinthManifest(instance: MinecraftInstance, options: Options, files: [ContentFile], loaderInfo: LoaderInfo) -> Data {
+    private static func buildModrinthManifest(instance: MinecraftInstance, options: Options, files: [ContentFile], loaderInfo: LoaderInfo) throws -> Data {
         let filesArray: [[String: Any]] = files.map { f in
             let sha1 = (try? FileHash.compute(f.absoluteURL, algorithm: .sha1)) ?? ""
             let sha512 = (try? FileHash.compute(f.absoluteURL, algorithm: .sha512)) ?? ""
@@ -239,10 +245,10 @@ public enum ModpackExporter {
             "files": filesArray,
             "dependencies": deps,
         ]
-        return try! JSONSerialization.data(withJSONObject: manifest, options: [.prettyPrinted, .withoutEscapingSlashes])
+        return try JSONSerialization.data(withJSONObject: manifest, options: [.prettyPrinted, .withoutEscapingSlashes])
     }
 
-    private static func buildCurseForgeManifest(instance: MinecraftInstance, options: Options, loaderInfo: LoaderInfo) -> Data {
+    private static func buildCurseForgeManifest(instance: MinecraftInstance, options: Options, loaderInfo: LoaderInfo) throws -> Data {
         let modLoaders: [[String: Any]] = {
             var out: [[String: Any]] = []
             if let v = loaderInfo.fabricLoader { out.append(["id": "fabric-\(v)", "primary": true]) }
@@ -265,10 +271,10 @@ public enum ModpackExporter {
             "files": [[String: Any]](),   // 本地自包含：mods 直接在 overrides，按需人工补 CurseForge fileID。
             "overrides": "overrides",
         ]
-        return try! JSONSerialization.data(withJSONObject: manifest, options: [.prettyPrinted, .withoutEscapingSlashes])
+        return try JSONSerialization.data(withJSONObject: manifest, options: [.prettyPrinted, .withoutEscapingSlashes])
     }
 
-    private static func buildHMCLManifest(instance: MinecraftInstance, options: Options, loaderInfo: LoaderInfo) -> Data {
+    private static func buildHMCLManifest(instance: MinecraftInstance, options: Options, loaderInfo: LoaderInfo) throws -> Data {
         let modLoaders: [[String: Any]] = {
             var out: [[String: Any]] = []
             if let v = loaderInfo.fabricLoader { out.append(["id": "fabric-loader-\(v)", "primary": true]) }
@@ -295,19 +301,32 @@ public enum ModpackExporter {
             "files": [[String: Any]](),
             "overrideTotalSize": 0,
         ]
-        return try! JSONSerialization.data(withJSONObject: manifest, options: [.prettyPrinted, .withoutEscapingSlashes])
+        return try JSONSerialization.data(withJSONObject: manifest, options: [.prettyPrinted, .withoutEscapingSlashes])
     }
 
     // MARK: - 归档写入辅助
 
     private static func addFile(at url: URL, as path: String, into archive: Archive) throws {
+        guard isSafeArchivePath(path) else {
+            throw MyLocalizedError(reason: "整合包导出路径不安全：\(path)")
+        }
         let data = try Data(contentsOf: url)
         try archive.addEntry(with: path, type: .file,
                              uncompressedSize: Int64(data.count)) { _, _ in data }
     }
 
     private static func addData(_ data: Data, as path: String, into archive: Archive) throws {
+        guard isSafeArchivePath(path) else {
+            throw MyLocalizedError(reason: "整合包导出路径不安全：\(path)")
+        }
         try archive.addEntry(with: path, type: .file,
                              uncompressedSize: Int64(data.count)) { _, _ in data }
+    }
+
+    private static func isSafeArchivePath(_ path: String) -> Bool {
+        let normalized = path.replacingOccurrences(of: "\\", with: "/")
+        guard !normalized.isEmpty, !normalized.hasPrefix("/") else { return false }
+        return !normalized.split(separator: "/", omittingEmptySubsequences: false)
+            .contains { $0.isEmpty || $0 == "." || $0 == ".." }
     }
 }

@@ -59,17 +59,16 @@ private struct CardBackgroundView: View {
     let isHovered: Bool
 
     var body: some View {
-        let theme = appSettings.theme ?? Theme.pcl
-        if let config = glassSettings.glassConfig {
+        if let config = glassSettings.appearance.glassConfig {
             LiquidGlassBackground(
                 role: .card,
                 config: config,
-                blurStrength: appSettings.glassCardBlurStrength,
-                surfaceOpacity: appSettings.glassSurfaceOpacity,
-                tintStrength: appSettings.glassTintStrength,
-                highlightStrength: appSettings.glassHighlightStrength,
-                shadowStrength: appSettings.glassShadowStrength,
-                interactive: appSettings.glassInteractiveEffects,
+                blurStrength: glassSettings.appearance.cardBlurStrength,
+                surfaceOpacity: glassSettings.appearance.surfaceOpacity,
+                tintStrength: glassSettings.appearance.tintStrength,
+                highlightStrength: glassSettings.appearance.highlightStrength,
+                shadowStrength: glassSettings.appearance.shadowStrength,
+                interactive: glassSettings.appearance.interactiveEffects,
                 shape: RoundedRectangle(cornerRadius: 12, style: .continuous)
             )
             .shadow(

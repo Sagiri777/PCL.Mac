@@ -161,10 +161,11 @@ public class AppRouter: ObservableObject {
     }
     
     public func removeLast() {
-        self.path.removeLast()
-        if self.path.isEmpty {
-            self.path.append(.launch)
+        guard self.path.count > 1 else {
+            self.path = [.launch]
+            return
         }
+        self.path.removeLast()
     }
 
     /// 统一菜单、旧标题栏与 Liquid Glass 工具栏的返回语义。
@@ -184,11 +185,11 @@ public class AppRouter: ObservableObject {
     }
     
     public func getLast() -> AppRoute {
-        return path.last!
+        path.last ?? .launch
     }
-    
+
     public func getRoot() -> AppRoute {
-        return path.first!
+        path.first ?? .launch
     }
 }
 

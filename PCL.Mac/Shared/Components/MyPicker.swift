@@ -58,7 +58,13 @@ struct MyPicker<Entry: Hashable>: View {
                 } else if let geo = geo {
                     let frame = geo.frame(in: .global)
                     overlayId = overlayManager.addOverlay(
-                        view: PickerMenu(entries: entries, onSelect: { selected = $0 ; overlayManager.removeOverlay(with: self.overlayId!) }, getText: getText)
+                        view: PickerMenu(entries: entries, onSelect: { value in
+                            selected = value
+                            if let currentOverlayId = self.overlayId {
+                                overlayManager.removeOverlay(with: currentOverlayId)
+                                self.overlayId = nil
+                            }
+                        }, getText: getText)
                             .frame(width: geo.size.width)
                             .foregroundStyle(AppSettings.shared.theme.getAccentColor()),
                         at: CGPoint(x: frame.minX, y: frame.maxY + 1)

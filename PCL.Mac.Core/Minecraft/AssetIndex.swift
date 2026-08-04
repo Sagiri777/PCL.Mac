@@ -12,7 +12,7 @@ public class AssetIndex {
     public let objects: [Object]
     
     public init(_ json: JSON) {
-        self.objects = json["objects"].dictionaryValue.values.map(Object.init)
+        self.objects = json["objects"].dictionaryValue.values.compactMap(Object.init)
     }
     
     public init(objects: [Object]) {
@@ -23,9 +23,13 @@ public class AssetIndex {
         public let hash: String
         public let size: Int32
         
-        public init(_ json: JSON) {
-            self.hash = json["hash"].stringValue
-            self.size = json["size"].int32Value
+        public init?(_ json: JSON) {
+            let hash = json["hash"].stringValue.lowercased()
+            guard hash.count == 40, hash.allSatisfy(\.isHexDigit) else { return nil }
+            let size = json["size"].int32Value
+            guard size >= 0 else { return nil }
+            self.hash = hash
+            self.size = size
         }
         
         public func appendTo(_ url: URL) -> URL {
@@ -35,6 +39,13 @@ public class AssetIndex {
     
     public static func parse(_ data: Data) throws -> AssetIndex {
         let json = try JSON(data: data)
-        return AssetIndex(json)
+        guard let objectDictionary = json["objects"].dictionary else {
+            throw MyLocalizedError(reason: "资源索引缺少 objects 字段")
+        }
+        let index = AssetIndex(json)
+        guard index.objects.count == objectDictionary.count else {
+            throw MyLocalizedError(reason: "资源索引包含无效的资源哈希")
+        }
+        return index
     }
 }

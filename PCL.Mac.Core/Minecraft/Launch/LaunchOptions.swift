@@ -8,7 +8,7 @@
 import Foundation
 
 public class LaunchOptions {
-    public var javaPath: URL!
+    public var javaPath: URL?
     public var isDemo: Bool = false
     public var skipResourceCheck: Bool = false
     public var playerName: String = ""

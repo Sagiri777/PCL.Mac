@@ -77,12 +77,18 @@ public class MinecraftInstaller {
                     loaderVersion
                 )
             case .forge:
-                try await ForgeInstaller(minecraftDirectory, task.versionURL, task.manifest!).install(
+                guard let manifest = task.manifest else {
+                    throw MyLocalizedError(reason: "客户端清单缺失，无法安装 Forge。")
+                }
+                try await ForgeInstaller(minecraftDirectory, task.versionURL, manifest).install(
                     minecraftVersion: minecraftVersion,
                     forgeVersion: loaderVersion
                 )
             case .neoforge:
-                try await NeoforgeInstaller(minecraftDirectory, task.versionURL, task.manifest!).install(
+                guard let manifest = task.manifest else {
+                    throw MyLocalizedError(reason: "客户端清单缺失，无法安装 NeoForge。")
+                }
+                try await NeoforgeInstaller(minecraftDirectory, task.versionURL, manifest).install(
                     minecraftVersion: minecraftVersion,
                     forgeVersion: loaderVersion
                 )
@@ -136,13 +142,16 @@ public class MinecraftInstaller {
         let architecture: Architecture = Architecture.system == .x64
             ? .x64
             : (instance.isUsingRosetta ? .x64 : .arm64)
+        guard let version = instance.version, let manifest = instance.manifest else {
+            throw MyLocalizedError(reason: "实例缺少有效的 Minecraft 版本或客户端清单。")
+        }
         let task = MinecraftInstallTask(
-            minecraftVersion: instance.version,
+            minecraftVersion: version,
             minecraftDirectory: instance.minecraftDirectory,
             name: instance.name,
             architecture: architecture
         ) { _ in }
-        task.manifest = instance.manifest
+        task.manifest = manifest
         try await downloadAssetIndex(task)
         try Task.checkCancellation()
         progress?(0.15, "已读取资源索引")
@@ -184,7 +193,10 @@ public class MinecraftInstaller {
     // MARK: 下载客户端本体
     private static func downloadClientJar(_ task: MinecraftInstallTask) async throws {
         task.updateStage(.clientJar)
-        let url = try DownloadSourceManager.shared.getClientJARURL(task.minecraftVersion, task.manifest!).unwrap("无法获取 \(task.minecraftVersion.displayName) 的客户端下载 URL。")
+        guard let manifest = task.manifest else {
+            throw MyLocalizedError(reason: "客户端清单尚未准备完成，无法获取客户端下载 URL。")
+        }
+        let url = try DownloadSourceManager.shared.getClientJARURL(task.minecraftVersion, manifest).unwrap("无法获取 \(task.minecraftVersion.displayName) 的客户端下载 URL。")
         
         try await SingleFileDownloader.download(
             task: task,
@@ -196,28 +208,33 @@ public class MinecraftInstaller {
     // MARK: 下载资源索引
     private static func downloadAssetIndex(_ task: MinecraftInstallTask) async throws {
         guard let manifest = task.manifest else {
-            err("任务客户端清单为空值，停止下载资源索引")
-            task.assetIndex = .init(objects: [])
-            return
+            throw MyLocalizedError(reason: "客户端清单缺失，无法下载资源索引。")
+        }
+        guard let assetIndex = manifest.assetIndex, !assetIndex.id.isEmpty else {
+            throw MyLocalizedError(reason: "客户端清单缺少有效的 assetIndex。")
         }
         
         task.updateStage(.clientIndex)
         
         let url: URL = try DownloadSourceManager.shared.getAssetIndexURL(task.minecraftVersion, manifest).unwrap("无法获取 \(task.minecraftVersion.displayName) 的 assetIndex 下载 URL。")
-        let destination: URL = task.minecraftDirectory.assetsURL.appending(component: "indexes").appending(component: "\(manifest.assetIndex!.id).json")
+        let destination: URL = task.minecraftDirectory.assetsURL.appending(component: "indexes").appending(component: "\(assetIndex.id).json")
         try await SingleFileDownloader.download(task: task, url: url, destination: destination)
         do {
             let data = try Data(contentsOf: destination)
             task.assetIndex = try .parse(data)
         } catch {
             err("在解析 JSON 时发生错误: \(error.localizedDescription)")
+            throw MyLocalizedError(reason: "无法解析资源索引：\(error.localizedDescription)")
         }
     }
     
     // MARK: 下载散列资源文件
     private static func downloadHashResourcesFiles(_ task: MinecraftInstallTask) async throws {
         task.updateStage(.clientResources)
-        let objects = task.assetIndex!.objects
+        guard let assetIndex = task.assetIndex else {
+            throw MyLocalizedError(reason: "资源索引缺失，无法下载游戏资源。")
+        }
+        let objects = assetIndex.objects
         
         var urls: [URL] = []
         var destinations: [URL] = []
@@ -301,7 +318,10 @@ public class MinecraftInstaller {
     // MARK: 解压本地库
     private static func unzipNatives(_ task: MinecraftInstallTask) throws {
         let nativesURL: URL = task.versionURL.appending(path: "natives")
-        for (_, native) in task.manifest!.getNeededNatives(for: task.architecture) {
+        guard let manifest = task.manifest else {
+            throw MyLocalizedError(reason: "客户端清单缺失，无法解压本地库。")
+        }
+        for (_, native) in manifest.getNeededNatives(for: task.architecture) {
             let jarURL: URL = task.minecraftDirectory.librariesURL.appending(path: native.path)
             Util.unzip(archiveURL: jarURL, destination: nativesURL, replace: true)
         }
@@ -327,7 +347,7 @@ public class MinecraftInstaller {
         for case let fileURL as URL in enumerator {
             guard fileURL.pathExtension == "dylib" || fileURL.pathExtension == "jnilib",
                   let resourceValues = try? fileURL.resourceValues(forKeys: [.isDirectoryKey]),
-                  !resourceValues.isDirectory! else { continue }
+                  resourceValues.isDirectory != true else { continue }
             
             // 验证架构
             let arch = Architecture.getArchOfFile(fileURL)
@@ -371,12 +391,13 @@ public class MinecraftInstaller {
         instance?.saveConfig()
         
         // 修改 GLFW
-        if let glfw = task.manifest!.getNeededLibraries(for: task.architecture).find({ $0.name.contains("lwjgl-glfw") }) {
+        if let glfw = task.manifest?.getNeededLibraries(for: task.architecture).find({ $0.name.contains("lwjgl-glfw") }),
+           let artifact = glfw.artifact {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/java")
             process.environment = ProcessInfo.processInfo.environment
             process.currentDirectoryURL = URL(fileURLWithPath: "/tmp")
-            process.arguments = ["-jar", SharedConstants.shared.applicationResourcesURL.appending(path: "glfw-patcher.jar").path, task.minecraftDirectory.librariesURL.appending(path: glfw.artifact!.path).path]
+            process.arguments = ["-jar", SharedConstants.shared.applicationResourcesURL.appending(path: "glfw-patcher.jar").path, task.minecraftDirectory.librariesURL.appending(path: artifact.path).path]
             do {
                 try process.run()
                 process.waitUntilExit()
@@ -409,9 +430,15 @@ public class MinecraftInstaller {
     // MARK: 获取进度
     public static func updateProgress(_ task: MinecraftInstallTask) {
         DispatchQueue.main.async {
-            task.totalFiles = 3 + task.assetIndex!.objects.count
-                + task.manifest!.getNeededLibraries(for: task.architecture).count
-                + task.manifest!.getNeededNatives(for: task.architecture).count
+            guard let assetIndex = task.assetIndex, let manifest = task.manifest else {
+                err("无法计算安装进度：客户端清单或资源索引缺失")
+                task.totalFiles = 0
+                task.remainingFiles = 0
+                return
+            }
+            task.totalFiles = 3 + assetIndex.objects.count
+                + manifest.getNeededLibraries(for: task.architecture).count
+                + manifest.getNeededNatives(for: task.architecture).count
             log("总文件数: \(task.totalFiles)")
             task.remainingFiles = task.totalFiles - 2
         }
@@ -467,17 +494,21 @@ public class MinecraftInstaller {
     }
     
     // MARK: 创建补全资源任务
-    public static func createCompleteTask(_ instance: MinecraftInstance, _ callback: (() -> Void)? = nil) -> InstallTask {
+    public static func createCompleteTask(_ instance: MinecraftInstance, _ callback: (() -> Void)? = nil) -> InstallTask? {
         let arch: Architecture
         if Architecture.system == .x64 { arch = .x64 }
         else { arch = instance.isUsingRosetta ? .x64 : .arm64 }
+        guard let version = instance.version, let manifest = instance.manifest else {
+            err("无法创建资源补全任务：实例缺少版本或客户端清单")
+            return nil
+        }
         let task = MinecraftInstallTask(
-            minecraftVersion: instance.version!,
+            minecraftVersion: version,
             minecraftDirectory: instance.minecraftDirectory,
             name: instance.name,
             architecture: arch
         ) { task in
-            task.manifest = instance.manifest
+            task.manifest = manifest
             try await downloadAssetIndex(task)
             try await downloadClientJar(task)
             try await downloadHashResourcesFiles(task)

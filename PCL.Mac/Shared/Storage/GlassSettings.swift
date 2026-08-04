@@ -20,6 +20,58 @@
 import Foundation
 import SwiftUI
 
+public struct GlassAppearanceState {
+    public let glassConfig: GlassConfig?
+    public let accentColor: Color
+    public let backgroundBlurStrength: Double
+    public let panelBlurStrength: Double
+    public let cardBlurStrength: Double
+    public let frameWidth: Double
+    public let frameBlurStrength: Double
+    public let surfaceOpacity: Double
+    public let tintStrength: Double
+    public let highlightStrength: Double
+    public let shadowStrength: Double
+    public let cornerRadius: Double
+    public let innerBorderCornerRadius: Double
+    public let contentCornerRadius: Double
+    public let interactiveEffects: Bool
+
+    public init(
+        glassConfig: GlassConfig? = nil,
+        accentColor: Color = .accentColor,
+        backgroundBlurStrength: Double = 1,
+        panelBlurStrength: Double = 1,
+        cardBlurStrength: Double = 1,
+        frameWidth: Double = 14,
+        frameBlurStrength: Double = 0.78,
+        surfaceOpacity: Double = 0.70,
+        tintStrength: Double = 0.22,
+        highlightStrength: Double = 0.62,
+        shadowStrength: Double = 0.55,
+        cornerRadius: Double = 22,
+        innerBorderCornerRadius: Double = 10,
+        contentCornerRadius: Double = 14,
+        interactiveEffects: Bool = true
+    ) {
+        self.glassConfig = glassConfig
+        self.accentColor = accentColor
+        self.backgroundBlurStrength = backgroundBlurStrength.clamped(to: 0...1)
+        self.panelBlurStrength = panelBlurStrength.clamped(to: 0...1)
+        self.cardBlurStrength = cardBlurStrength.clamped(to: 0...1)
+        self.frameWidth = max(0, frameWidth)
+        self.frameBlurStrength = frameBlurStrength.clamped(to: 0...1)
+        self.surfaceOpacity = surfaceOpacity.clamped(to: 0...1)
+        self.tintStrength = tintStrength.clamped(to: 0...1)
+        self.highlightStrength = highlightStrength.clamped(to: 0...1)
+        self.shadowStrength = shadowStrength.clamped(to: 0...1)
+        self.cornerRadius = max(0, cornerRadius)
+        self.innerBorderCornerRadius = max(0, innerBorderCornerRadius)
+        self.contentCornerRadius = max(0, contentCornerRadius)
+        self.interactiveEffects = interactiveEffects
+    }
+}
+
 public final class GlassSettings: ObservableObject {
     public static let shared = GlassSettings()
 
@@ -28,12 +80,12 @@ public final class GlassSettings: ObservableObject {
         objectWillChange.send()
     }
 
-    /// 当前主题色（取自 AppSettings，便于 BaseCardContainer 不订阅 AppSettings 也能渲染）。
-    /// 初始用系统色，等到 AppSettings 完成初始化后由 AppDelegate 显式调 reloadThemeDerived() 覆盖。
-    @Published public private(set) var accentColor: Color = .accentColor
+    /// 所有 Glass 派生值的单一发布入口，避免 AppStorage 不发布导致界面读到旧值。
+    /// 初始用默认值，等 AppSettings 完成初始化后由 AppDelegate 显式同步。
+    @Published public private(set) var appearance = GlassAppearanceState()
 
-    /// 当前主题的液态玻璃配置（nil = 非玻璃主题）。
-    @Published public private(set) var glassConfig: GlassConfig?
+    public var accentColor: Color { appearance.accentColor }
+    public var glassConfig: GlassConfig? { appearance.glassConfig }
 
     public init() {
         // ⚠️ 不要在这里访问 AppSettings.shared。
@@ -42,8 +94,7 @@ public final class GlassSettings: ObservableObject {
         // 递归锁处理，触发 EXC_BREAKPOINT("trying to lock recursively")。
         // 用默认值起步，等 AppSettings 完成 init 后再由 AppDelegate 主动
         // 调用 reloadThemeDerived() 把派生值 push 过来。
-        self.glassConfig = nil
-        self.accentColor = .accentColor
+        self.appearance = GlassAppearanceState()
     }
 
     /// 主题/主题色变更时由 AppSettings 主动调用，重新缓存派生值。
@@ -52,8 +103,31 @@ public final class GlassSettings: ObservableObject {
     /// themeId.didSet 等"用户态"路径）。
     public func reloadThemeDerived() {
         let s = AppSettings.shared
-        glassConfig = s.theme?.getGlassConfig()
-        accentColor = s.effectiveAccentColor
-        objectWillChange.send()
+        let accentColor = s.customAccentColorEnabled
+            ? Color(.sRGB, red: s.customAccentRed, green: s.customAccentGreen, blue: s.customAccentBlue)
+            : (s.theme?.baseAccentColor ?? s.cachedAccentColor)
+        appearance = GlassAppearanceState(
+            glassConfig: s.theme?.getGlassConfig(),
+            accentColor: accentColor,
+            backgroundBlurStrength: s.glassBackgroundBlurStrength,
+            panelBlurStrength: s.glassPanelBlurStrength,
+            cardBlurStrength: s.glassCardBlurStrength,
+            frameWidth: s.glassFrameWidth,
+            frameBlurStrength: s.glassFrameBlurStrength,
+            surfaceOpacity: s.glassSurfaceOpacity,
+            tintStrength: s.glassTintStrength,
+            highlightStrength: s.glassHighlightStrength,
+            shadowStrength: s.glassShadowStrength,
+            cornerRadius: s.glassCornerRadius,
+            innerBorderCornerRadius: s.glassInnerBorderCornerRadius,
+            contentCornerRadius: s.glassContentCornerRadius,
+            interactiveEffects: s.glassInteractiveEffects
+        )
+    }
+}
+
+private extension Comparable {
+    func clamped(to limits: ClosedRange<Self>) -> Self {
+        min(max(self, limits.lowerBound), limits.upperBound)
     }
 }

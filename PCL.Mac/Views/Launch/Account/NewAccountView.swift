@@ -316,7 +316,8 @@ fileprivate struct NewYggdrasilAccountView: View {
                     .fixedSize()
                     
                     MyButton(text: "添加") {
-                        guard isValidServer(authenticationServer) else {
+                        guard let serverURL = URL(string: authenticationServer),
+                              serverURL.host() != nil else {
                             hint("输入的 URL 无效！", .critical)
                             return
                         }
@@ -334,7 +335,7 @@ fileprivate struct NewYggdrasilAccountView: View {
                         Task {
                             do {
                                 let account = try await YggdrasilAccount(
-                                    authenticationServer: URL(string: authenticationServer)!,
+                                    authenticationServer: serverURL,
                                     accountIdentifier: accountIdentifier,
                                     password: password
                                 )
@@ -362,8 +363,7 @@ fileprivate struct NewYggdrasilAccountView: View {
     }
     
     private func isValidServer(_ str: String) -> Bool {
-        let url = URL(string: str)
-        return url != nil && url!.host() != nil
+        URL(string: str)?.host() != nil
     }
 }
 

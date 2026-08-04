@@ -168,7 +168,11 @@ public class MinecraftCrashHandler {
         log("以下是 PCL.Mac 检测到的环境信息:")
         log("架构: \(Architecture.system)")
         log("分支: \(SharedConstants.shared.branch)")
-        log("Java 架构: \(Architecture.getArchOfFile(instance.config.javaURL!))")
+        if let javaURL = instance.config?.javaURL {
+            log("Java 架构: \(Architecture.getArchOfFile(javaURL))")
+        } else {
+            warn("无法确定 Java 架构：实例未配置有效 Java")
+        }
 
         do {
             let contents = try FileManager.default.contentsOfDirectory(

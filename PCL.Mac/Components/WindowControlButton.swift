@@ -16,7 +16,8 @@ struct WindowControlButton: View {
         .foregroundStyle(.white)
         .bold()
     ) {
-        NSApplication.shared.terminate(nil)
+        guard let window = WindowControlButton.activeWindow else { return }
+        window.close()
     }
     
     static let Miniaturize: WindowControlButton = .init(
@@ -27,7 +28,8 @@ struct WindowControlButton: View {
         .foregroundStyle(.white)
         .bold()
     ) {
-        NSApplication.shared.windows.first!.miniaturize(nil)
+        guard let window = WindowControlButton.activeWindow else { return }
+        window.miniaturize(nil)
     }
     
     static let Back: WindowControlButton = .init(
@@ -70,5 +72,9 @@ struct WindowControlButton: View {
                 isHovered = hover
             }
             .onTapGesture(perform: action)
+    }
+
+    private static var activeWindow: NSWindow? {
+        NSApp.keyWindow ?? NSApp.mainWindow ?? NSApp.windows.first(where: \.isVisible)
     }
 }

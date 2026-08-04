@@ -15,7 +15,9 @@ public class Util {
         do {
             let archive = try Archive(url: jarURL, accessMode: .read)
             let data = try ArchiveUtil.getEntryOrThrow(archive: archive, name: "META-INF/MANIFEST.MF")
-            let manifest = String(data: data, encoding: .utf8)!
+            guard let manifest = String(data: data, encoding: .utf8) else {
+                throw MyLocalizedError(reason: "MANIFEST.MF 不是有效的 UTF-8 文本")
+            }
 
             if let match = manifest.firstMatch(of: /(?m)^Main-Class:\s*([^\r\n]+)/) {
                 return String(match.1)
@@ -44,30 +46,50 @@ public class Util {
     }
     
     public static func parse(mavenCoordinate: String) -> MavenCoordinate {
+        guard let coordinate = parseIfValid(mavenCoordinate: mavenCoordinate) else {
+            err("无法解析 Maven 坐标：\(mavenCoordinate)")
+            return MavenCoordinate("", "", "")
+        }
+        return coordinate
+    }
+
+    private static func parseIfValid(mavenCoordinate: String) -> MavenCoordinate? {
         let pattern = #"^([^:]+):([^:]+):([^:@]+)(?::([^@]+))?(?:@(.+))?$"#
-        let r = mavenCoordinate.range(of: pattern, options: .regularExpression)!
+        guard let r = mavenCoordinate.range(of: pattern, options: .regularExpression),
+              let regex = try? NSRegularExpression(pattern: pattern) else {
+            return nil
+        }
         let match = String(mavenCoordinate[r])
-        let regex = try! NSRegularExpression(pattern: pattern)
         let nsrange = NSRange(match.startIndex..<match.endIndex, in: match)
-        let result = regex.firstMatch(in: match, options: [], range: nsrange)!
+        guard let result = regex.firstMatch(in: match, options: [], range: nsrange) else {
+            return nil
+        }
         func group(_ i: Int) -> String? {
             guard let range = Range(result.range(at: i), in: match) else { return nil }
             return String(match[range])
         }
+        guard let groupId = group(1),
+              let artifactId = group(2),
+              let version = group(3) else {
+            return nil
+        }
         return MavenCoordinate(
-            group(1)!,
-            group(2)!,
-            group(3)!,
+            groupId,
+            artifactId,
+            version,
             classifier: group(4),
             packaging: group(5)
         )
     }
     
     public static func toPath(mavenCoordinate: String) -> String {
-        let coord = parse(mavenCoordinate: mavenCoordinate)
+        guard let coord = parseIfValid(mavenCoordinate: mavenCoordinate) else {
+            err("无法生成 Maven 路径：\(mavenCoordinate)")
+            return ""
+        }
         return "\(coord.groupId.replacingOccurrences(of: ".", with: "/"))/\(coord.artifactId)/\(coord.version)/\(coord.artifactId)-\(coord.version)"
-        + (coord.classifier != nil ? "-" + coord.classifier! : "")
-        + "." + (coord.packaging != nil ? coord.packaging! : "jar")
+        + (coord.classifier.map { "-\($0)" } ?? "")
+        + "." + (coord.packaging ?? "jar")
     }
     
     public static func replaceTemplateStrings(_ strings: [String], with dict: [String: String]) -> [String] {
@@ -108,7 +130,12 @@ public class Util {
         
         for entry in archive {
             do {
-                let destinationFileURL = destination.appendingPathComponent(entry.path)
+                let rootURL = destination.standardizedFileURL
+                let destinationFileURL = rootURL.appendingPathComponent(entry.path).standardizedFileURL
+                guard destinationFileURL.path == rootURL.path
+                        || destinationFileURL.path.hasPrefix(rootURL.path + "/") else {
+                    throw MyLocalizedError(reason: "压缩包包含不安全路径：\(entry.path)")
+                }
                 if FileManager.default.fileExists(atPath: destinationFileURL.path) && replace {
                     try FileManager.default.removeItem(at: destinationFileURL)
                     debug("已删除重复文件 \(destinationFileURL.lastPathComponent)")
@@ -153,7 +180,8 @@ public class Util {
     }
     
     public static func replaceRoot(url: any URLConvertible, root: String, target: String) -> any URLConvertible {
-        return URL(string: url.url.absoluteString.replacingOccurrences(of: root, with: target))!
+        let replaced = url.url.absoluteString.replacingOccurrences(of: root, with: target)
+        return URL(string: replaced) ?? url
     }
 
     /// 在 Finder 中打开（或定位到）给定的 URL，处理几种边界情况：

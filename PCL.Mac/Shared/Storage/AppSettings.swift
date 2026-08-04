@@ -79,11 +79,11 @@ public class AppSettings: ObservableObject {
     /// 主题 ID (文件名)
     @CodableAppStorage("themeId") public var themeId: String = "pcl" {
         didSet {
-            if themeId != self.theme.id {
+            if themeId != self.theme?.id {
                 self.theme = .load(id: themeId)
                 DataManager.shared.objectWillChange.send()
-                GlassSettings.shared.reloadThemeDerived()
                 refreshDerivedStyles()
+                GlassSettings.shared.reloadThemeDerived()
             }
         }
     }
@@ -185,6 +185,13 @@ public class AppSettings: ObservableObject {
         GlassSettings.shared.reloadThemeDerived()
     }
 
+    /// 主题色或主题本身发生变化时，同时更新正文选中态样式和 Glass 派生色。
+    /// 玻璃滑块只调用 refreshVisuals，避免拖动时触发整棵页面重算。
+    public func refreshThemeAppearance() {
+        refreshDerivedStyles()
+        GlassSettings.shared.reloadThemeDerived()
+    }
+
     /// 仅发布窗口配置变化。避免同时再发一次 objectWillChange，造成整棵界面重复计算。
     public func refreshWindowConfiguration() {
         appearanceRevision &+= 1
@@ -195,6 +202,10 @@ public class AppSettings: ObservableObject {
     
     /// 版本列表源
     @CodableAppStorage("versionManifestSource") public var versionManifestSource: DownloadSourceOption = .both
+
+    /// 无障碍辅助：仅在 CurseForge 官方网页队列中，让嵌入式浏览器自动打开已验证文件的官方下载页。
+    /// 默认关闭，下载结果仍会经过 SHA-1 校验后才写入实例。
+    @AppStorage("accessibilityBrowserAutomationDownloadEnabled") public var accessibilityBrowserAutomationDownloadEnabled: Bool = false
 
     /// 头像源 fallback 列表（按优先级排序）。
     /// 占位符：`{uuid}` = 去掉短横线的小写 UUID，`{username}` = 账号 username。
@@ -241,6 +252,7 @@ public class AppSettings: ObservableObject {
         self.theme = .load(id: themeId)
         DataManager.shared.objectWillChange.send()
         refreshDerivedStyles()
+        GlassSettings.shared.reloadThemeDerived()
     }
     
     private init() {
@@ -287,7 +299,7 @@ public class AppSettings: ObservableObject {
         minecraftDirectories.removeAll(where: { $0.rootURL == url })
         
         if minecraftDirectories.isEmpty {
-            minecraftDirectories.append(currentMinecraftDirectory!)
+            minecraftDirectories.append(currentMinecraftDirectory ?? .default)
         }
         
         DataManager.shared.objectWillChange.send()

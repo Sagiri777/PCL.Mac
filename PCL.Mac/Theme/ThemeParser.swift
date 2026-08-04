@@ -30,7 +30,7 @@ public class ThemeParser {
                 continue
             }
             for jsonFile in files where jsonFile.pathExtension.lowercased() == "json" {
-                guard let data = try? FileHandle(forReadingFrom: jsonFile).readToEnd(),
+                guard let data = try? Data(contentsOf: jsonFile),
                       let json = try? JSON(data: data),
                       let id = json["id"].string,
                       seenIds.insert(id).inserted else { continue }
@@ -143,14 +143,17 @@ public class ThemeParser {
         if json["type"].stringValue == "linearGradient" {
             guard let startPointArray = json["startPoint"].array,
                   let endPointArray = json["endPoint"].array,
-                  let colorsArray = json["colors"].array else {
+                  let colorsArray = json["colors"].array,
+                  startPointArray.count >= 2,
+                  endPointArray.count >= 2,
+                  !colorsArray.isEmpty else {
                 return nil
             }
             
             let startPoint = UnitPoint(x: startPointArray[0].doubleValue, y: startPointArray[1].doubleValue)
             let endPoint = UnitPoint(x: endPointArray[0].doubleValue, y: endPointArray[1].doubleValue)
             
-            if colorsArray[0].type == .string { // 不带 location 的均匀分布 color
+            if colorsArray.allSatisfy({ $0.type == .string }) { // 不带 location 的均匀分布 color
                 return AnyShapeStyle(
                     LinearGradient(
                         gradient: Gradient(colors: colorsArray.map(parseColor(_:))),
@@ -158,9 +161,13 @@ public class ThemeParser {
                         endPoint: endPoint
                     )
                 )
-            } else if colorsArray[0].type == .dictionary { // 带 location 的 Stop
-                let stops: [Gradient.Stop] = colorsArray.map { stop in
-                    return Gradient.Stop(color: parseColor(stop), location: stop["location"].doubleValue)
+            } else if colorsArray.allSatisfy({ $0.type == .dictionary }) { // 带 location 的 Stop
+                let stops = colorsArray.compactMap { stop -> Gradient.Stop? in
+                    guard let location = stop["location"].double else { return nil }
+                    return Gradient.Stop(color: parseColor(stop), location: location)
+                }
+                guard stops.count == colorsArray.count, !stops.isEmpty else {
+                    return nil
                 }
                 return AnyShapeStyle(
                     LinearGradient(

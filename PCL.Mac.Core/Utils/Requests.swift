@@ -35,7 +35,10 @@ public enum NetworkCategory: Sendable {
     case other            // 其他未分类请求（默认走直连）
 }
 
-public struct Response: Sendable {
+/// The response is an immutable snapshot. SwiftyJSON does not currently
+/// annotate its value type as Sendable, but the JSON value is constructed
+/// before the response leaves the URLSession task and is never mutated here.
+public struct Response: @unchecked Sendable {
     public let data: Data?
     public let json: JSON?
     public let error: Error?

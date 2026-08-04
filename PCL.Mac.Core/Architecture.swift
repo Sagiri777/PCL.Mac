@@ -10,6 +10,8 @@ import Foundation
 public enum Architecture {
     public static var system: Architecture {
         get {
+            systemArchLock.lock()
+            defer { systemArchLock.unlock() }
             if _systemArch == nil {
                 var systemInfo = utsname()
                 uname(&systemInfo)
@@ -18,9 +20,13 @@ public enum Architecture {
                     guard let value = element.value as? Int8, value != 0 else { return identifier }
                     return identifier + String(UnicodeScalar(UInt8(value)))
                 }
-                _systemArch = (identifier == "arm64" ? .arm64 : .x64)
+                _systemArch = switch identifier {
+                case "arm64": .arm64
+                case "x86_64": .x64
+                default: .unknown
+                }
             }
-            return _systemArch!
+            return _systemArch ?? .unknown
         }
     }
     
@@ -78,6 +84,7 @@ public enum Architecture {
     }
     
     private static var _systemArch: Architecture? = nil
+    private static let systemArchLock = NSLock()
     private static let archCache = ArchCache()
 
     /// 线程安全的 (路径, mtime, size) → 架构缓存。

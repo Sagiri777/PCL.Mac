@@ -20,7 +20,7 @@ public struct SharedConstants {
     public let dateFormatter = DateFormatter()
     
     public let isDevelopment: Bool
-    public let version = "0.2.0"
+    public let version = "2.0.0"
     public let branch: String
     public let editionName = "PCL.Mac Liquid Glass Edition"
     public let editionSubtitle = "macOS 26 原生液态玻璃增强版"
@@ -36,8 +36,13 @@ public struct SharedConstants {
         self.dateFormatter.dateFormat = "yyyy/MM/dd HH:mm"
         self.dateFormatter.timeZone = TimeZone(identifier: "Asia/Shanghai")
         
-        self.isDevelopment = (Bundle.main.object(forInfoDictionaryKey: "IS_DEVELOPMENT") as! String) == "false" ? false : true
-        let branch = Bundle.main.object(forInfoDictionaryKey: "BRANCH") as! String
-        self.branch = branch.isEmpty ? "本地构建" : branch
+        let developmentValue = Bundle.main.object(forInfoDictionaryKey: "IS_DEVELOPMENT") as? String
+        self.isDevelopment = developmentValue?.lowercased() != "false"
+        let branchValue = Bundle.main.object(forInfoDictionaryKey: "BRANCH") as? String
+        if let branchValue, !branchValue.isEmpty {
+            self.branch = branchValue
+        } else {
+            self.branch = "本地构建"
+        }
     }
 }

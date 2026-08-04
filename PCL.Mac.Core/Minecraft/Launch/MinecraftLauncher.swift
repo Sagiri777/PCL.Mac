@@ -21,23 +21,33 @@ public class MinecraftLauncher {
     }
     
     public func launch(_ options: LaunchOptions, _ callback: @MainActor @escaping (Int32) -> Void = { _ in }) {
+        guard let javaPath = options.javaPath,
+              let manifest = instance.manifest,
+              !manifest.mainClass.isEmpty,
+              let config = instance.config else {
+            err("无法启动 Minecraft：Java 路径、客户端清单或实例配置无效")
+            return
+        }
+
         let process = Process()
-        process.executableURL = options.javaPath
+        process.executableURL = javaPath
         process.environment = ProcessInfo.processInfo.environment
-        process.arguments = []
-        process.arguments!.append(contentsOf: buildJvmArguments(options))
-        process.arguments!.append(instance.manifest.mainClass)
-        process.arguments!.append(contentsOf: buildGameArguments(options))
-        let command = process.executableURL!.path + " " + process.arguments!.joined(separator: " ")
+        var arguments = buildJvmArguments(options)
+        arguments.append(manifest.mainClass)
+        arguments.append(contentsOf: buildGameArguments(options))
+        process.arguments = arguments
+        let command = javaPath.path + " " + arguments.joined(separator: " ")
             .replacingOccurrences(of: #"--accessToken\s+\S+"#, with: "--accessToken 🎉", options: .regularExpression)
         debug(command)
         MinecraftCrashHandler.lastLaunchCommand = command
         process.currentDirectoryURL = instance.runningDirectory
         
-        if instance.config.qualityOfService.rawValue == 0 {
+        var qualityOfService = config.qualityOfService
+        if qualityOfService.rawValue == 0 {
             instance.config.qualityOfService = .default
+            qualityOfService = .default
         }
-        process.qualityOfService = instance.config.qualityOfService
+        process.qualityOfService = qualityOfService
         
         instance.process = process
         do {
@@ -109,6 +119,7 @@ public class MinecraftLauncher {
     }
     
     public func buildJvmArguments(_ options: LaunchOptions) -> [String] {
+        guard let config = instance.config, let manifest = instance.manifest else { return [] }
         let values: [String: String] = [
             "natives_directory": instance.runningDirectory.appending(path: "natives").path,
             "launcher_name": "PCL.Mac",
@@ -121,22 +132,23 @@ public class MinecraftLauncher {
         ]
         
         var args: [String] = [
-            "-Xmx\(instance.config.maxMemory)m",
+            "-Xmx\(config.maxMemory)m",
             "-Djna.tmpdir=${natives_directory}"
         ]
         
         args.insert(contentsOf: options.yggdrasilArguments, at: 0)
-        args.append(contentsOf: instance.manifest.getArguments().getAllowedJVMArguments(targetArchitecture: targetArchitecture))
+        args.append(contentsOf: manifest.getArguments().getAllowedJVMArguments(targetArchitecture: targetArchitecture))
         
         return Util.replaceTemplateStrings(args, with: values)
     }
     
     private func buildClasspath() -> String {
+        guard let manifest = instance.manifest else { return "" }
         // 去重
-        ClientManifest.deduplicateLibraries(instance.manifest)
+        ClientManifest.deduplicateLibraries(manifest)
         
         var urls: [URL] = []
-        for library in instance.manifest.getNeededLibraries(for: targetArchitecture) {
+        for library in manifest.getNeededLibraries(for: targetArchitecture) {
             if let artifact = library.artifact {
                 urls.append(instance.minecraftDirectory.librariesURL.appending(path: artifact.path))
             }
@@ -147,12 +159,13 @@ public class MinecraftLauncher {
     }
     
     private func buildGameArguments(_ options: LaunchOptions) -> [String] {
+        guard let manifest = instance.manifest else { return [] }
         let values: [String: String] = [
             "auth_player_name": options.playerName,
-            "version_name": instance.version!.displayName,
+            "version_name": instance.version?.displayName ?? instance.name,
             "game_directory": instance.runningDirectory.path,
             "assets_root": instance.minecraftDirectory.assetsURL.path,
-            "assets_index_name": instance.manifest.assetIndex?.id ?? "",
+            "assets_index_name": manifest.assetIndex?.id ?? "",
             "auth_uuid": options.uuid.uuidString.replacingOccurrences(of: "-", with: "").lowercased(),
             "auth_access_token": options.accessToken,
             "user_type": "msa",
@@ -166,7 +179,7 @@ public class MinecraftLauncher {
         }
         
         return Util.replaceTemplateStrings(
-            instance.manifest.getArguments().getAllowedGameArguments(targetArchitecture: targetArchitecture),
+            manifest.getArguments().getAllowedGameArguments(targetArchitecture: targetArchitecture),
             with: values
         ).union(args)
     }

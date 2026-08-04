@@ -112,20 +112,27 @@ public struct ModpackImportRecoveryInfo: Sendable {
     public let completedFiles: Int
     public let totalFiles: Int
     public let lastError: String?
-    public let manualDownloadListURL: URL?
+    /// A persistent queue for files the user must confirm from the official
+    /// CurseForge page. It can point to a legacy manifest until first resume.
+    public let officialWebDownloadManifestURL: URL?
+
+    /// Kept as a source-compatible alias for callers compiled against the
+    /// earlier recovery API. It is never shown as a manual-placement workflow.
+    public var manualDownloadListURL: URL? { officialWebDownloadManifestURL }
 
     public init(
         instanceURL: URL,
         completedFiles: Int,
         totalFiles: Int,
         lastError: String?,
-        manualDownloadListURL: URL?
+        officialWebDownloadManifestURL: URL? = nil,
+        manualDownloadListURL: URL? = nil
     ) {
         self.instanceURL = instanceURL
         self.completedFiles = completedFiles
         self.totalFiles = totalFiles
         self.lastError = lastError
-        self.manualDownloadListURL = manualDownloadListURL
+        self.officialWebDownloadManifestURL = officialWebDownloadManifestURL ?? manualDownloadListURL
     }
 
     public var summary: String {
@@ -140,7 +147,13 @@ public struct ModpackImportFailure: LocalizedError, Sendable {
     public let completedFiles: Int
     public let totalFiles: Int
     public let recoveryDirectory: URL
-    public let manualDownloadListURL: URL?
+    public let officialWebDownloadManifestURL: URL?
+    /// `true` only after all direct launcher downloads have completed, so the
+    /// UI can safely open the official-page queue without skipping them.
+    public let canBeginOfficialWebDownloads: Bool
+
+    /// Compatibility alias only; new UI must use the official-web property.
+    public var manualDownloadListURL: URL? { officialWebDownloadManifestURL }
 
     public init(
         stage: ModpackImportStage,
@@ -148,14 +161,17 @@ public struct ModpackImportFailure: LocalizedError, Sendable {
         completedFiles: Int,
         totalFiles: Int,
         recoveryDirectory: URL,
-        manualDownloadListURL: URL?
+        officialWebDownloadManifestURL: URL? = nil,
+        canBeginOfficialWebDownloads: Bool = false,
+        manualDownloadListURL: URL? = nil
     ) {
         self.stage = stage
         self.reason = reason
         self.completedFiles = completedFiles
         self.totalFiles = totalFiles
         self.recoveryDirectory = recoveryDirectory
-        self.manualDownloadListURL = manualDownloadListURL
+        self.officialWebDownloadManifestURL = officialWebDownloadManifestURL ?? manualDownloadListURL
+        self.canBeginOfficialWebDownloads = canBeginOfficialWebDownloads
     }
 
     public var errorDescription: String? {
@@ -165,8 +181,8 @@ public struct ModpackImportFailure: LocalizedError, Sendable {
         } else {
             lines.append("未完成实例已保留，继续重试会从上次阶段恢复。")
         }
-        if let manualDownloadListURL {
-            lines.append("人工下载清单：\(manualDownloadListURL.path)")
+        if let officialWebDownloadManifestURL {
+            lines.append("官方网页下载队列：\(officialWebDownloadManifestURL.path)")
         }
         return lines.joined(separator: "\n")
     }
@@ -176,7 +192,8 @@ public struct ModpackImportFailure: LocalizedError, Sendable {
 
 public enum ModpackImporter {
     private static let checkpointFileName = ".PCL_Mac_import.json"
-    private static let manualDownloadFileName = ".PCL_Mac_manual_downloads.json"
+    private static let officialWebDownloadFileName = ".PCL_Mac_official_web_downloads.json"
+    private static let legacyManualDownloadFileName = ".PCL_Mac_manual_downloads.json"
 
     private struct ResolvedCurseForgeFile: Codable, Sendable {
         let projectID: Int
@@ -257,7 +274,8 @@ public enum ModpackImporter {
         }
 
         func finish() throws {
-            try? FileManager.default.removeItem(at: instanceURL.appending(path: ModpackImporter.manualDownloadFileName))
+            try? FileManager.default.removeItem(at: instanceURL.appending(path: ModpackImporter.officialWebDownloadFileName))
+            try? FileManager.default.removeItem(at: instanceURL.appending(path: ModpackImporter.legacyManualDownloadFileName))
             if FileManager.default.fileExists(atPath: checkpointURL.path) {
                 try FileManager.default.removeItem(at: checkpointURL)
             }
@@ -274,22 +292,6 @@ public enum ModpackImporter {
             try FileManager.default.createDirectory(at: instanceURL, withIntermediateDirectories: true)
             try encoder.encode(checkpoint).write(to: checkpointURL, options: .atomic)
         }
-    }
-
-    private struct ManualDownloadRecord: Codable, Sendable {
-        let projectID: Int
-        let fileID: Int
-        let fileName: String
-        let destination: String
-        let expectedSHA1: String?
-        let curseForgePage: URL?
-    }
-
-    private struct ManualDownloadManifest: Codable, Sendable {
-        let schemaVersion: Int
-        let reason: String
-        let generatedAt: Date
-        let files: [ManualDownloadRecord]
     }
 
     private struct CurseForgeProjectHint {
@@ -340,15 +342,43 @@ public enum ModpackImporter {
         .sorted { $0.0.updatedAt > $1.0.updatedAt }
         .first
         .map { checkpoint, directory in
-            let manualURL = directory.appending(path: manualDownloadFileName)
+            let officialURL = directory.appending(path: officialWebDownloadFileName)
+            let legacyURL = directory.appending(path: legacyManualDownloadFileName)
+            let queueURL: URL?
+            if FileManager.default.fileExists(atPath: officialURL.path) {
+                queueURL = officialURL
+            } else if FileManager.default.fileExists(atPath: legacyURL.path) {
+                queueURL = legacyURL
+            } else {
+                queueURL = nil
+            }
             return ModpackImportRecoveryInfo(
                 instanceURL: directory,
                 completedFiles: checkpoint.completedFiles,
                 totalFiles: checkpoint.totalFiles,
                 lastError: checkpoint.lastError,
-                manualDownloadListURL: FileManager.default.fileExists(atPath: manualURL.path) ? manualURL : nil
+                officialWebDownloadManifestURL: queueURL
             )
         }
+    }
+
+    /// Reads a persisted official-page queue. Old manual manifests have the
+    /// same record shape, so they are atomically upgraded before planning.
+    static func officialWebDownloadPlan(
+        queueURL: URL,
+        instanceRoot: URL
+    ) throws -> OfficialWebDownloadPlan {
+        let manifest = try OfficialWebDownloadManifest.read(from: queueURL)
+        if queueURL.lastPathComponent == legacyManualDownloadFileName {
+            let upgradedURL = instanceRoot.appending(path: officialWebDownloadFileName)
+            try manifest.write(to: upgradedURL)
+            try? FileManager.default.removeItem(at: queueURL)
+        }
+        return OfficialWebDownloadPlanner.plan(manifest: manifest, instanceRoot: instanceRoot)
+    }
+
+    static func discardIncompleteRecovery(at instanceURL: URL) {
+        cleanupIncompleteInstance(at: instanceURL)
     }
 
     private static func prepareImportSession(
@@ -430,7 +460,7 @@ public enum ModpackImporter {
                     completedFiles: batch.completedFiles,
                     totalFiles: batch.totalFiles,
                     recoveryDirectory: session.instanceURL,
-                    manualDownloadListURL: nil
+                    officialWebDownloadManifestURL: nil
                 )
             } else {
                 failure = ModpackImportFailure(
@@ -439,7 +469,7 @@ public enum ModpackImporter {
                     completedFiles: session.checkpoint.completedFiles,
                     totalFiles: session.checkpoint.totalFiles,
                     recoveryDirectory: session.instanceURL,
-                    manualDownloadListURL: nil
+                    officialWebDownloadManifestURL: nil
                 )
             }
             session.fail(failure)
@@ -756,16 +786,27 @@ public enum ModpackImporter {
             log("CurseForge 整合包安装：\(name)，共 \(resolvedFiles.count) 个声明文件")
 
             var downloadItems: [DownloadItem] = []
-            var manuallySatisfied = 0
-            var manualRecords: [ManualDownloadRecord] = []
+            var alreadySatisfied = 0
+            var officialWebRecords: [OfficialWebDownloadRecord] = []
             for file in resolvedFiles {
                 let destination = try safeDestination(relativePath: file.relativePath, under: instanceDir)
-                if let downloadURL = file.downloadURL {
-                    downloadItems.append(DownloadItem(downloadURL, destination, sha1: file.sha1))
-                } else if fileIsValid(at: destination, sha1: file.sha1) {
-                    manuallySatisfied += 1
+                let verifiedSHA1: String?
+                if let sha1 = file.sha1?.lowercased(), OfficialWebDownloadPlanner.isSHA1(sha1) {
+                    verifiedSHA1 = sha1
                 } else {
-                    manualRecords.append(.init(
+                    verifiedSHA1 = nil
+                }
+                if let verifiedSHA1,
+                   OfficialWebDownloadPlanner.fileIsValid(at: destination, sha1: verifiedSHA1) {
+                    alreadySatisfied += 1
+                } else if let downloadURL = file.downloadURL,
+                          let verifiedSHA1 {
+                    downloadItems.append(DownloadItem(downloadURL, destination, sha1: verifiedSHA1))
+                } else {
+                    // No URL is inferred here. Missing hashes and missing or
+                    // untrusted project pages remain recoverable blocks that
+                    // the web queue planner will describe to the user.
+                    officialWebRecords.append(.init(
                         projectID: file.projectID,
                         fileID: file.fileID,
                         fileName: file.fileName,
@@ -776,16 +817,16 @@ public enum ModpackImporter {
                 }
             }
 
-            let manualListURL = instanceDir.appending(path: manualDownloadFileName)
-            if manualRecords.isEmpty {
-                try? FileManager.default.removeItem(at: manualListURL)
+            let officialQueueURL = instanceDir.appending(path: officialWebDownloadFileName)
+            if officialWebRecords.isEmpty {
+                try? FileManager.default.removeItem(at: officialQueueURL)
             } else {
-                try writeManualDownloadManifest(manualRecords, to: manualListURL)
+                try OfficialWebDownloadManifest(files: officialWebRecords).write(to: officialQueueURL)
             }
 
             do {
                 try await MultiFileDownloader(items: downloadItems, replaceMethod: .skip, networkCategory: .gameDownload) { fileProgress, finished in
-                    let completed = manuallySatisfied + finished
+                    let completed = alreadySatisfied + finished
                     let totalProgress = resolvedFiles.isEmpty
                         ? 1
                         : Double(completed) / Double(resolvedFiles.count)
@@ -803,24 +844,25 @@ public enum ModpackImporter {
                 throw ModpackImportFailure(
                     stage: .files,
                     reason: failure.reason,
-                    completedFiles: manuallySatisfied + failure.completedFiles,
+                    completedFiles: alreadySatisfied + failure.completedFiles,
                     totalFiles: resolvedFiles.count,
                     recoveryDirectory: instanceDir,
-                    manualDownloadListURL: manualRecords.isEmpty ? nil : manualListURL
+                    officialWebDownloadManifestURL: officialWebRecords.isEmpty ? nil : officialQueueURL
                 )
             }
 
-            let completed = manuallySatisfied + downloadItems.count
-            if !manualRecords.isEmpty {
-                let reason = "CurseForge 中有 \(manualRecords.count) 个文件由作者关闭了第三方启动器下载。其余 \(completed) 个文件已下载并保留；请按照清单手动下载到标注目录后继续重试。PCL.Mac 不会绕过作者的分发设置。"
-                warn("\(name)：\(reason) 清单位于 \(manualListURL.path)")
+            let completed = alreadySatisfied + downloadItems.count
+            if !officialWebRecords.isEmpty {
+                let reason = "CurseForge 中有 \(officialWebRecords.count) 个文件不能通过启动器直接下载。其余 \(completed) 个文件已下载并保留；PCL.Mac 将在官方页面下载完成并通过 SHA-1 校验后自动继续导入。"
+                warn("\(name)：\(reason) 官方网页队列位于 \(officialQueueURL.path)")
                 throw ModpackImportFailure(
                     stage: .files,
                     reason: reason,
                     completedFiles: completed,
                     totalFiles: resolvedFiles.count,
                     recoveryDirectory: instanceDir,
-                    manualDownloadListURL: manualListURL
+                    officialWebDownloadManifestURL: officialQueueURL,
+                    canBeginOfficialWebDownloads: true
                 )
             }
             try session.complete(.files, completedFiles: resolvedFiles.count, totalFiles: resolvedFiles.count)
@@ -950,7 +992,8 @@ public enum ModpackImporter {
                     relative = "\(instanceId).jar"
                 }
                 guard relative != checkpointFileName,
-                      relative != manualDownloadFileName else {
+                      relative != officialWebDownloadFileName,
+                      relative != legacyManualDownloadFileName else {
                     throw MyLocalizedError(reason: "整合包试图覆盖 PCL.Mac 的导入检查点：\(relative)")
                 }
                 let target = try safeDestination(relativePath: relative, under: versionDir)
@@ -1041,7 +1084,16 @@ public enum ModpackImporter {
                 metadataByFileID[id] = item
             }
         }
-        let hints = try curseForgeProjectHints(in: zipURL)
+        let parsedHints = try curseForgeProjectHints(in: zipURL)
+        let hints: [CurseForgeProjectHint?]
+        if parsedHints.isEmpty || parsedHints.count == identifiers.count {
+            hints = parsedHints
+        } else {
+            // `modlist.html` is presentation data. Do not associate a page by
+            // index when it does not have one entry per manifest file.
+            warn("CurseForge modlist.html 项目链接数与清单文件数不一致，网页接力将安全暂停。")
+            hints = []
+        }
 
         return try identifiers.enumerated().map { index, identifier in
             guard let item = metadataByFileID[identifier.fileID] else {
@@ -1055,7 +1107,7 @@ public enum ModpackImporter {
             let manifestFile = mods[index]
             let suppliedName = manifestFile["fileName"].string?.trimmingCharacters(in: .whitespacesAndNewlines)
             let metadataName = item["fileName"].string?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let rawName = suppliedName?.isEmpty == false ? suppliedName! : (metadataName ?? "")
+            let rawName = suppliedName?.isEmpty == false ? (suppliedName ?? "") : (metadataName ?? "")
             let fileName = (rawName as NSString).lastPathComponent
             guard !fileName.isEmpty, fileName != ".", fileName != ".." else {
                 throw MyLocalizedError(reason: "CurseForge 文件 \(identifier.fileID) 没有安全、可用的文件名。")
@@ -1068,9 +1120,10 @@ public enum ModpackImporter {
             let destinationFolder = hint?.destinationFolder ?? "mods"
             let suppliedURL = manifestFile["url"].url
             let downloadURL = suppliedURL ?? item["downloadUrl"].url
+            // Use only the project page embedded by the pack's mod list. Do
+            // not synthesize a /files/<id> address from metadata: the user
+            // remains in control of navigation and the official download.
             let projectPageURL = hint?.projectURL
-                .appending(path: "files")
-                .appending(path: String(identifier.fileID))
 
             return ResolvedCurseForgeFile(
                 projectID: identifier.projectID,
@@ -1106,33 +1159,9 @@ public enum ModpackImporter {
                 .replacingOccurrences(of: "&amp;", with: "&")
                 .replacingOccurrences(of: "&#39;", with: "'")
             guard let url = URL(string: href),
-                  url.host?.lowercased().hasSuffix("curseforge.com") == true,
-                  url.path.lowercased().contains("/minecraft/") else { return nil }
+                  CurseForgeURLPolicy.isOfficialProjectPage(url) else { return nil }
             return CurseForgeProjectHint(projectURL: url)
         }
-    }
-
-    private static func fileIsValid(at url: URL, sha1: String?) -> Bool {
-        guard FileManager.default.fileExists(atPath: url.path) else { return false }
-        guard let sha1, !sha1.isEmpty else { return true }
-        return (try? FileHash.verify(url, expected: sha1, algorithm: .sha1)) != nil
-    }
-
-    private static func writeManualDownloadManifest(
-        _ records: [ManualDownloadRecord],
-        to url: URL
-    ) throws {
-        let manifest = ManualDownloadManifest(
-            schemaVersion: 1,
-            reason: "这些 CurseForge 文件由作者关闭了第三方启动器下载。请从 curseForgePage 下载原文件，保持文件名不变，并放入 destination 后重试。",
-            generatedAt: Date(),
-            files: records
-        )
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        encoder.dateEncodingStrategy = .iso8601
-        try url.ensureParentDirectoryExists()
-        try encoder.encode(manifest).write(to: url, options: .atomic)
     }
 
     /// 解压 zip 里的 overrides（顶层文件 + override/ 子目录）到目标目录。
@@ -1160,7 +1189,8 @@ public enum ModpackImporter {
                 }
             }()
             guard relativePath != checkpointFileName,
-                  relativePath != manualDownloadFileName else {
+                  relativePath != officialWebDownloadFileName,
+                  relativePath != legacyManualDownloadFileName else {
                 throw MyLocalizedError(reason: "整合包试图覆盖 PCL.Mac 的导入检查点：\(relativePath)")
             }
             let target = try safeDestination(relativePath: relativePath, under: instanceDir)
@@ -1266,7 +1296,8 @@ public enum ModpackImporter {
 
         MinecraftInstance.clearCache(for: versionDirectory)
         guard let instance = MinecraftInstance.create(minecraftDirectory, versionDirectory),
-              !instance.manifest.mainClass.isEmpty else {
+              let manifest = instance.manifest,
+              !manifest.mainClass.isEmpty else {
             throw MyLocalizedError(reason: "实例文件已生成，但启动清单无法加载。")
         }
         if let expectedLoader = requirement?.loader,

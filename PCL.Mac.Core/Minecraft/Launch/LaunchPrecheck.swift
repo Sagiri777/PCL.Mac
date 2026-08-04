@@ -52,7 +52,11 @@ public class LaunchPrecheck {
             log("[launchPrecheck] 已为实例切换到 Java \(suitableJava.displayVersion)")
         }
 
-        let javaArchitecture = Architecture.getArchOfFile(instance.config.javaURL!)
+        guard let javaURL = instance.config.javaURL else {
+            err("[launchPrecheck] 实例没有可用的 Java 路径")
+            return .failure(.javaNotFound)
+        }
+        let javaArchitecture = Architecture.getArchOfFile(javaURL)
         if Architecture.system == .x64 && javaArchitecture == .arm64 {
             err("[launchPrecheck] Java 架构不兼容")
             return .failure(.javaNotSupport)

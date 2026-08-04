@@ -101,20 +101,24 @@ final class LogStore {
 }
 
 public struct LogManager {
+    private static func sourceName(_ file: String) -> String {
+        file.split(separator: "/").last.map(String.init) ?? file
+    }
+
     public static func log(_ message: Any, file: String = #file, line: Int = #line) {
-        LogStore.shared.append(String(describing: message), "INFO", file.split(separator: "/").last! + ":" + String(line))
+        LogStore.shared.append(String(describing: message), "INFO", sourceName(file) + ":" + String(line))
     }
 
     public static func warn(_ message: Any, file: String = #file, line: Int = #line) {
-        LogStore.shared.append(String(describing: message), "WARN", file.split(separator: "/").last! + ":" + String(line))
+        LogStore.shared.append(String(describing: message), "WARN", sourceName(file) + ":" + String(line))
     }
 
     public static func err(_ message: Any, file: String = #file, line: Int = #line) {
-        LogStore.shared.append(String(describing: message), "ERROR", file.split(separator: "/").last! + ":" + String(line))
+        LogStore.shared.append(String(describing: message), "ERROR", sourceName(file) + ":" + String(line))
     }
 
     public static func debug(_ message: Any, file: String = #file, line: Int = #line) {
-        LogStore.shared.append(String(describing: message), "DEBUG", file.split(separator: "/").last! + ":" + String(line))
+        LogStore.shared.append(String(describing: message), "DEBUG", sourceName(file) + ":" + String(line))
     }
 
     public static func raw(_ message: Any) {
@@ -127,4 +131,3 @@ public func warn(_ message: Any, file: String = #file, line: Int = #line) { LogM
 public func err(_ message: Any, file: String = #file, line: Int = #line) { LogManager.err(message, file: file, line: line) }
 public func debug(_ message: Any, file: String = #file, line: Int = #line) { LogManager.debug(message, file: file, line: line) }
 public func raw(_ message: Any, file: String = #file, line: Int = #line) { LogManager.raw(message) }
-

@@ -28,7 +28,7 @@ struct JavaDownloadTest {
     }
     
     @Test func testMatchFileName() {
-        if let match = "zulu24.32.13-ca-crac-jdk24.0.2-macosx_aarch64.zip".wholeMatch(of: /zulu.*-ca-fx-(jdk|jre)([0-9.]+)-macosx_(x64|aarch64)\.zip/) {
+        if let match = "zulu24.32.13-ca-crac-jdk24.0.2-macosx_aarch64.zip".wholeMatch(of: /zulu.*-ca-(?:fx|crac)-(jdk|jre)([0-9.]+)-macosx_(x64|aarch64)\.zip/) {
             let type = match.1
             let version = match.2
             let arch = match.3

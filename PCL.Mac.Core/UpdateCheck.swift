@@ -43,9 +43,12 @@ public class UpdateCheck {
                 return nil
             }
             let formatter = ISO8601DateFormatter()
-            let date = formatter.date(from: artifact["created_at"].stringValue)!
+            guard let date = formatter.date(from: artifact["created_at"].stringValue),
+                  let url = artifact["archive_download_url"].url else {
+                err("GitHub 工件响应缺少有效时间或下载地址")
+                return nil
+            }
             log("最新工件构建时间: \(SharedConstants.shared.dateFormatter.string(from: date))")
-            let url = URL(string: artifact["archive_download_url"].stringValue)!
             return .init(time: date, url: url)
         }
         return nil

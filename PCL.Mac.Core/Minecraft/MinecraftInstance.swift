@@ -97,16 +97,28 @@ public class MinecraftInstance: Identifiable, Equatable, Hashable {
                 debug(configPath.path)
             }
         }
-        self.config = config ?? MinecraftConfig(version: nil)
+        // `loadConfig()` 已经把旧实例配置读入 self.config。原来的无条件赋值
+        // 会在这里把它覆盖成空默认值，导致 Java、内存、跳过校验和版本信息在
+        // 每次启动/打开实例时丢失。显式传入的 config 仍优先，损坏或缺失的旧
+        // 配置才回退到默认值。
+        if let config {
+            self.config = config
+        } else if self.config == nil {
+            self.config = MinecraftConfig(version: nil)
+        }
 
         if !loadManifest() { return false }
 
         var configChanged = !hadConfigFile
-        if let version = config.minecraftVersion {
+        if let version = self.config.minecraftVersion, !version.isEmpty {
             self.version = .init(displayName: version)
         } else {
             detectVersion()
-            config.minecraftVersion = version.displayName
+            guard let detectedVersion = self.version else {
+                err("实例配置和客户端清单都缺少有效的 Minecraft 版本")
+                return false
+            }
+            self.config.minecraftVersion = detectedVersion.displayName
             configChanged = true
         }
 
@@ -125,7 +137,7 @@ public class MinecraftInstance: Identifiable, Equatable, Hashable {
     }
     
     public func loadConfig() throws {
-        self.config = .init(try .init(data: try FileHandle(forReadingFrom: configPath).readToEnd()!))
+        self.config = .init(try .init(data: Data(contentsOf: configPath)))
     }
     
     public func saveConfig() {
@@ -207,9 +219,16 @@ public class MinecraftInstance: Identifiable, Equatable, Hashable {
             }
         }
         launchOptions.javaPath = config.javaURL
-        
-        loadManifest()
-        if Architecture.getArchOfFile(launchOptions.javaPath).isCompatiableWithSystem() {
+
+        guard loadManifest(), let manifest = self.manifest,
+              self.version != nil,
+              let javaPath = launchOptions.javaPath else {
+            err("无法启动：实例配置、客户端清单或 Java 路径无效")
+            hint("无法启动：请检查版本清单和 Java 设置。", .critical)
+            return
+        }
+
+        if Architecture.getArchOfFile(javaPath).isCompatiableWithSystem() {
             ArtifactVersionMapper.map(manifest)
             isUsingRosetta = false
         } else {
@@ -217,17 +236,24 @@ public class MinecraftInstance: Identifiable, Equatable, Hashable {
             isUsingRosetta = true
             warn("正在使用 Rosetta 运行 Minecraft")
         }
-        
+
         if !config.skipResourcesCheck && !launchOptions.skipResourceCheck {
             log("正在进行资源完整性检查")
             await withCheckedContinuation { continuation in
-                let task = MinecraftInstaller.createCompleteTask(self, continuation.resume)
+                guard let task = MinecraftInstaller.createCompleteTask(self, continuation.resume) else {
+                    continuation.resume()
+                    return
+                }
                 task.start()
             }
             log("资源完整性检查完成")
         }
         
-        let launcher = MinecraftLauncher(self)!
+        guard let launcher = MinecraftLauncher(self) else {
+            err("无法创建 Minecraft 启动器")
+            hint("无法启动 Minecraft：启动器初始化失败。", .critical)
+            return
+        }
         launcher.launch(launchOptions) { exitCode in
             if exitCode != 0 {
                 log("检测到非 0 退出代码")
@@ -243,9 +269,13 @@ public class MinecraftInstance: Identifiable, Equatable, Hashable {
                         let formatter = DateFormatter()
                         formatter.dateFormat = "yyyy-M-d_HH.mm.ss"
                         savePanel.nameFieldStringValue = "错误报告-\(formatter.string(from: .init()))"
-                        savePanel.beginSheetModal(for: NSApplication.shared.windows.first!) { [unowned self] result in
+                        guard let hostWindow = NSApp.keyWindow ?? NSApp.mainWindow ?? NSApp.windows.first(where: \.isVisible) else {
+                            err("无法导出错误报告：没有可用的宿主窗口")
+                            return
+                        }
+                        savePanel.beginSheetModal(for: hostWindow) { [weak self] result in
                             if result == .OK {
-                                if let url = savePanel.url {
+                                if let self, let url = savePanel.url {
                                     MinecraftCrashHandler.exportErrorReport(self, launcher, to: url)
                                 }
                             }
@@ -261,12 +291,15 @@ public class MinecraftInstance: Identifiable, Equatable, Hashable {
         do {
             let manifestPath = runningDirectory.appending(path: runningDirectory.lastPathComponent + ".json")
             
-            let data = try FileHandle(forReadingFrom: manifestPath).readToEnd()!
+            let data = try Data(contentsOf: manifestPath)
             self.clientBrand = MinecraftInstance.getClientBrand(String(data: data, encoding: .utf8) ?? "")
             
             guard let manifest = try ClientManifest.parse(
                 url: manifestPath, minecraftDirectory: minecraftDirectory
-            ) else { return false }
+            ), !manifest.id.isEmpty else {
+                err("客户端清单缺少有效的版本 id")
+                return false
+            }
             self.manifest = manifest
         } catch {
             err("无法加载客户端清单: \(error.localizedDescription)")
@@ -309,18 +342,18 @@ public class MinecraftInstance: Identifiable, Equatable, Hashable {
 
 public struct MinecraftConfig: Codable {
     public var additionalLibraries: Set<String> = []
-    public var javaURL: URL! {
+    public var javaURL: URL? {
         get {
             return javaURLString == "" ? nil : URL(fileURLWithPath: javaURLString)
         }
         set (value) {
-            javaURLString = value.path
+            javaURLString = value?.path ?? ""
         }
     }
     public var skipResourcesCheck: Bool = false
     public var maxMemory: Int32 = 4096
     public var qualityOfService: QualityOfService = .default
-    public var minecraftVersion: String!
+    public var minecraftVersion: String?
     
     private var javaURLString: String
     
@@ -382,4 +415,4 @@ public enum ClientBrand: String, Codable, Hashable {
     }
 }
 
-extension QualityOfService: Codable { }
+extension QualityOfService: @retroactive Codable { }

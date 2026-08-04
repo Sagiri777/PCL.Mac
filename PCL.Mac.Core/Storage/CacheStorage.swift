@@ -13,6 +13,7 @@ public class CacheStorage {
     public static let `default`: CacheStorage = .init(rootURL: .applicationSupportDirectory.appending(path: "minecraft").appending(path: "cache"))
     
     private let rootURL: URL
+    private let lock = NSLock()
     private var libraries: [Library]
     
     public init(rootURL: URL) {
@@ -21,7 +22,7 @@ public class CacheStorage {
         let indexURL = rootURL.appending(path: "index.json")
         if FileManager.default.fileExists(atPath: indexURL.path) {
             do {
-                let data = try FileHandle(forReadingFrom: indexURL).readToEnd()!
+                let data = try Data(contentsOf: indexURL)
                 let json = try JSON(data: data)
                 self.libraries = json["libraries"].arrayValue.map(Library.init)
             } catch {
@@ -34,10 +35,13 @@ public class CacheStorage {
     }
     
     public func save() {
+        lock.lock()
+        let librariesSnapshot = libraries
+        lock.unlock()
         let encoder = JSONEncoder()
         encoder.outputFormatting = .prettyPrinted
         do {
-            try encoder.encode(["libraries" : libraries]).write(to: rootURL.appending(path: "index.json"), options: .atomic)
+            try encoder.encode(["libraries" : librariesSnapshot]).write(to: rootURL.appending(path: "index.json"), options: .atomic)
         } catch {
             err("无法保存 libraries: \(error.localizedDescription)")
         }
@@ -54,12 +58,17 @@ public class CacheStorage {
         if FileManager.default.fileExists(atPath: dest.path) {
             return true
         }
-        if let library = libraries.first(where: { $0.name == name }) {
+        lock.lock()
+        let library = libraries.first(where: { $0.name == name })
+        lock.unlock()
+        if let library {
             let path = getLibraryPath(library.hash)
             
             guard FileManager.default.fileExists(atPath: path.path) else {
                 err("\(library.name) 对应的文件 (\(path.path)) 不存在！")
+                lock.lock()
                 libraries.removeAll(where: { $0.hash == library.hash })
+                lock.unlock()
                 save()
                 return false
             }
@@ -77,7 +86,10 @@ public class CacheStorage {
     }
     
     public func add(name: String, path: URL) {
-        if libraries.contains(where: { $0.name == name }) {
+        lock.lock()
+        let alreadyExists = libraries.contains(where: { $0.name == name })
+        lock.unlock()
+        if alreadyExists {
             return
         }
         
@@ -94,13 +106,17 @@ public class CacheStorage {
         do {
             try? FileManager.default.createDirectory(at: dest.parent(), withIntermediateDirectories: true)
             try FileManager.default.copyItem(at: path, to: dest)
-            save()
         } catch {
             err("无法复制文件: \(error.localizedDescription)")
             return
         }
         
-        libraries.append(.init(name: name, hash: hash, type: "jar"))
+        lock.lock()
+        if !libraries.contains(where: { $0.name == name }) {
+            libraries.append(.init(name: name, hash: hash, type: "jar"))
+        }
+        lock.unlock()
+        save()
     }
     
     private struct Library: Codable {

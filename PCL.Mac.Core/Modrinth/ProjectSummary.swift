@@ -122,19 +122,30 @@ public class ProjectSummary: Hashable, Identifiable, Equatable {
         self.tags = tags
     }
     
-    convenience init(json: JSON) {
+    public convenience init?(json: JSON) {
+        let type = ProjectType(rawValue: json["project_type"].stringValue) ?? .mod
+        let slug = json["slug"].stringValue
+        let projectID = json["project_id"].string ?? json["id"].stringValue
+        guard !slug.isEmpty,
+              !projectID.isEmpty,
+              let lastUpdate = ModrinthProjectSearcher.shared.parseDate(
+                  from: json["date_modified"].string ?? json["updated"].stringValue
+              ),
+              let infoURL = URL(string: "https://modrinth.com/\(type.modrinthPath)/\(slug)") else {
+            return nil
+        }
         self.init(
-            type: ProjectType(rawValue: json["project_type"].stringValue) ?? .mod,
-            projectId: json["project_id"].string ?? json["id"].stringValue,
-            modId: json["slug"].stringValue,
+            type: type,
+            projectId: projectID,
+            modId: slug,
             name: json["title"].stringValue,
             description: json["description"].stringValue,
-            lastUpdate: ModrinthProjectSearcher.shared.dateFormatter.date(from: json["date_modified"].string ?? json["updated"].stringValue)!,
+            lastUpdate: lastUpdate,
             downloadCount: json["downloads"].intValue,
             gameVersions: (json["game_versions"].array ?? json["versions"].arrayValue).map { MinecraftVersion(displayName: $0.stringValue) },
             categories: json["categories"].arrayValue.union(json["loaders"].arrayValue).map { $0.stringValue },
             iconURL: json["icon_url"].url,
-            infoURL: URL(string: "https://modrinth.com/\((ProjectType(rawValue: json["project_type"].stringValue) ?? .mod).modrinthPath)/\(json["slug"].stringValue)")!,
+            infoURL: infoURL,
             versions: json["versions"].array.map { $0.map { $0.stringValue } } // 若 versions 存在，传入 versions 的 [String] 形式，否则传入 nil
         )
     }

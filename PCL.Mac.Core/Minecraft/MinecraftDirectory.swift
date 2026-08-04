@@ -94,11 +94,11 @@ public class MinecraftDirectory: Codable, Identifiable, Hashable {
                 // 先在后台把所有实例解析完，再一次性推给 UI。
                 // 原来每个实例一次 MainActor.run，N 个实例就是 N 次跳转 +
                 // N 次全界面失效（instances 变化会经 objectWillChange 传播）。
-                var loaded: [InstanceInfo] = []
-                loaded.reserveCapacity(instanceDirectories.count)
+                var loadedInstances: [InstanceInfo] = []
+                loadedInstances.reserveCapacity(instanceDirectories.count)
                 for instanceDirectory in instanceDirectories {
                     if let instance = MinecraftInstance.create(self, instanceDirectory) {
-                        loaded.append(
+                        loadedInstances.append(
                             InstanceInfo(
                                 minecraftDirectory: self,
                                 icon: instance.getIconName(),
@@ -110,9 +110,10 @@ public class MinecraftDirectory: Codable, Identifiable, Hashable {
                         )
                     }
                 }
+                let finalInstances = loadedInstances
 
                 await MainActor.run {
-                    self.instances = loaded
+                    self.instances = finalInstances
                     self.isLoading = false
                     DataManager.shared.objectWillChange.send()
                     callback?(self.instances)

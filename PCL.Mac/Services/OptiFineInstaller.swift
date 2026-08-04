@@ -58,7 +58,9 @@ public enum OptiFineInstaller {
     ///   - instance: 目标实例
     ///   - optifine: 要安装的 OptiFine 版本（来自 fetchVersionList）
     public static func install(_ optifine: OptiFineVersion, into instance: MinecraftInstance) async throws {
-        let downloadURL = URL(string: "https://bmclapi2.bangbang93.com/optifine/\(optifine.filename)")!
+        guard let downloadURL = URL(string: "https://bmclapi2.bangbang93.com/optifine/\(optifine.filename)") else {
+            throw MyLocalizedError(reason: "OptiFine 下载地址无效")
+        }
         let versionDirName = "\(optifine.mcversion)-OptiFine_\(optifine.type)_\(optifine.patch)"
         let versionDir = instance.runningDirectory.parent()
             .appending(path: versionDirName)

@@ -33,16 +33,41 @@ public enum ProjectType: String {
 public class ModrinthProjectSearcher {
     public static let shared: ModrinthProjectSearcher = .init()
     
-    public var dateFormatter: ISO8601DateFormatter
+    public let dateFormatter: ISO8601DateFormatter
+    private let dateFormatterLock = NSLock()
+    private let dependencyCacheLock = NSLock()
     private var dependencyCache: [String: ProjectSummary?] = [:]
     
     private init() {
         self.dateFormatter = ISO8601DateFormatter()
         dateFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
     }
+
+    func parseDate(from value: String) -> Date? {
+        dateFormatterLock.lock()
+        defer { dateFormatterLock.unlock() }
+        return dateFormatter.date(from: value)
+    }
     
     public func get(_ id: String) async throws -> ProjectSummary {
-        return .init(json: try await Requests.get("https://api.modrinth.com/v2/project/\(id)", ignoredFailureStatusCodes: [404], category: .gameDownload).getJSONOrThrow())
+        let json = try await Requests.get("https://api.modrinth.com/v2/project/\(id)", ignoredFailureStatusCodes: [404], category: .gameDownload).getJSONOrThrow()
+        guard let summary = ProjectSummary(json: json) else {
+            throw MyLocalizedError(reason: "Modrinth 项目响应格式异常：\(id)")
+        }
+        return summary
+    }
+
+    private func cachedDependency(_ id: String) -> (exists: Bool, summary: ProjectSummary?) {
+        dependencyCacheLock.lock()
+        defer { dependencyCacheLock.unlock() }
+        guard let value = dependencyCache[id] else { return (false, nil) }
+        return (true, value)
+    }
+
+    private func cacheDependency(_ summary: ProjectSummary?, for id: String) {
+        dependencyCacheLock.lock()
+        dependencyCache[id] = summary
+        dependencyCacheLock.unlock()
     }
     
     private func getDependencies(_ json: JSON) async -> [ProjectDependency] {
@@ -52,11 +77,12 @@ public class ModrinthProjectSearcher {
             guard dependency["dependency_type"] != "incompatible" else { continue }
             
             let dependencySummary: ProjectSummary?
-            if let cache = dependencyCache[projectId] {
-                dependencySummary = cache
+            let cached = cachedDependency(projectId)
+            if cached.exists {
+                dependencySummary = cached.summary
             } else {
                 dependencySummary = try? await get(projectId)
-                dependencyCache[projectId] = dependencySummary
+                cacheDependency(dependencySummary, for: projectId)
             }
             
             if let dependencySummary = dependencySummary {
@@ -74,8 +100,20 @@ public class ModrinthProjectSearcher {
     
     public func getVersion(_ version: String) async throws -> ProjectVersion {
         let json = try await Requests.get("https://api.modrinth.com/v2/version/\(version)", category: .gameDownload).getJSONOrThrow()
-        let summary = try await get(json["project_id"].stringValue)
-        
+        guard let projectID = json["project_id"].string, !projectID.isEmpty else {
+            throw MyLocalizedError(reason: "Modrinth 版本响应缺少 project_id")
+        }
+        let summary = try await get(projectID)
+        return try await makeVersion(json: json, summary: summary)
+    }
+
+    private func makeVersion(json: JSON, summary: ProjectSummary) async throws -> ProjectVersion {
+        guard let updateDate = parseDate(from: json["date_published"].stringValue),
+              let file = json["files"].arrayValue.first,
+              let downloadURL = file["url"].url else {
+            throw MyLocalizedError(reason: "Modrinth 版本响应缺少有效日期或下载地址")
+        }
+
         return .init(
             projectType: summary.type,
             projectId: json["project_id"].stringValue,
@@ -83,33 +121,25 @@ public class ModrinthProjectSearcher {
             versionNumber: json["version_number"].stringValue,
             type: json["version_type"].stringValue,
             downloads: json["downloads"].intValue,
-            updateDate: dateFormatter.date(from: json["date_published"].stringValue)!,
+            updateDate: updateDate,
             gameVersions: json["game_versions"].arrayValue.map { MinecraftVersion(displayName: $0.stringValue) },
             loaders: json["loaders"].arrayValue.map { ClientBrand(rawValue: $0.stringValue) ?? .vanilla },
             dependencies: await getDependencies(json),
-            downloadURL: json["files"].arrayValue.first!["url"].url!
+            downloadURL: downloadURL
         )
     }
     
     public func getVersionMap(id: String) async throws -> ProjectVersionMap {
         let json = try await Requests.get("https://api.modrinth.com/v2/project/\(id)/version", category: .gameDownload).getJSONOrThrow()
-        let summary = try await get(json.arrayValue[0]["project_id"].stringValue)
+        let versions = json.arrayValue
+        guard let projectID = versions.first?["project_id"].string, !projectID.isEmpty else {
+            return [:]
+        }
+        let summary = try await get(projectID)
         var versionMap: ProjectVersionMap = [:]
         
-        for version in json.arrayValue {
-            let version = ProjectVersion(
-                projectType: summary.type,
-                projectId: version["project_id"].stringValue,
-                name: version["name"].stringValue,
-                versionNumber: version["version_number"].stringValue,
-                type: version["version_type"].stringValue,
-                downloads: version["downloads"].intValue,
-                updateDate: dateFormatter.date(from: version["date_published"].stringValue)!,
-                gameVersions: version["game_versions"].arrayValue.map { MinecraftVersion(displayName: $0.stringValue) },
-                loaders: version["loaders"].arrayValue.map { ClientBrand(rawValue: $0.stringValue) ?? .vanilla },
-                dependencies: await getDependencies(version),
-                downloadURL: version["files"].arrayValue.first!["url"].url!
-            )
+        for versionJSON in versions {
+            let version = try await makeVersion(json: versionJSON, summary: summary)
             
             for gameVersion in version.gameVersions {
                 for loader in version.loaders {
@@ -117,7 +147,7 @@ public class ModrinthProjectSearcher {
                     if versionMap[key] == nil {
                         versionMap[key] = []
                     }
-                    versionMap[key]!.append(version)
+                    versionMap[key, default: []].append(version)
                 }
             }
         }
@@ -137,8 +167,10 @@ public class ModrinthProjectSearcher {
             facets.append(["categories:\(loader.rawValue)"])
         }
         
-        let facetsData = try! JSONSerialization.data(withJSONObject: facets)
-        let facetsString = String(data: facetsData, encoding: .utf8)!
+        let facetsData = try JSONSerialization.data(withJSONObject: facets)
+        guard let facetsString = String(data: facetsData, encoding: .utf8) else {
+            throw MyLocalizedError(reason: "无法编码 Modrinth 搜索条件")
+        }
         
         let json = try await Requests.get(
             "https://api.modrinth.com/v2/search",
@@ -150,6 +182,6 @@ public class ModrinthProjectSearcher {
             encodeMethod: .urlEncoded
         ).getJSONOrThrow()
         
-        return json["hits"].arrayValue.map(ProjectSummary.init(json:))
+        return json["hits"].arrayValue.compactMap(ProjectSummary.init(json:))
     }
 }

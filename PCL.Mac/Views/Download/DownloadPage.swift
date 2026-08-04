@@ -20,7 +20,11 @@ struct DownloadPage: View {
         self.version = version
         self.name = version.displayName
         self.back = back
-        self.tasks.addTask(key: "minecraft", task: MinecraftInstaller.createTask(version, version.displayName, AppSettings.shared.currentMinecraftDirectory!))
+        if let directory = AppSettings.shared.currentMinecraftDirectory {
+            self.tasks.addTask(key: "minecraft", task: MinecraftInstaller.createTask(version, version.displayName, directory))
+        } else {
+            self.errorMessage = "请先选择 Minecraft 文件夹"
+        }
     }
     
     var body: some View {
@@ -140,7 +144,11 @@ struct DownloadPage: View {
                         
                         DataManager.shared.inprogressInstallTasks = self.tasks
                         DataManager.shared.router.append(.installing(tasks: tasks))
-                        self.tasks.tasks["minecraft"]!.start()
+                        guard let minecraftTask = self.tasks.tasks["minecraft"] else {
+                            hint("下载任务初始化失败，请重试。", .critical)
+                            return
+                        }
+                        minecraftTask.start()
                     }
                     .foregroundStyle(.white)
                     .padding()

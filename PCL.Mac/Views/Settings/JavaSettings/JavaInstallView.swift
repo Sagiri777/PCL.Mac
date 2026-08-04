@@ -85,10 +85,10 @@ struct JavaPackageView: View {
         MyListItem {
             HStack(alignment: .center) {
                 VStack(alignment: .leading) {
-                    Text("\(package.type.rawValue.uppercased()) \(package.version[0])")
+                    Text("\(package.type.rawValue.uppercased()) \(package.version.first ?? 0)")
                         .foregroundStyle(isHovered ? AppSettings.shared.theme.getTextStyle() : .init(Color("TextColor")))
                     HStack {
-                        Text("\(package.versionString)，\(package.arch) 架构")
+                        Text(verbatim: "\(package.versionString)，\(package.arch) 架构")
                     }
                     .foregroundStyle(Color(hex: 0x8C8C8C))
                 }

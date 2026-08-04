@@ -24,7 +24,12 @@ public class OfficialDownloadSource: DownloadSource {
     }
     
     public func getClientManifestURL(_ version: MinecraftVersion) -> URL? {
-        return try? URL(string: DataManager.shared.versionManifest!.versions.find { $0.id == version.displayName }.unwrap().url)
+        guard let manifest = DataManager.shared.versionManifest,
+              let gameVersion = manifest.version(id: version.displayName),
+              !gameVersion.url.isEmpty else {
+            return nil
+        }
+        return URL(string: gameVersion.url)
     }
     
     public func getAssetIndexURL(_ version: MinecraftVersion, _ manifest: ClientManifest) -> URL? {
@@ -32,7 +37,8 @@ public class OfficialDownloadSource: DownloadSource {
     }
     
     public func getClientJARURL(_ version: MinecraftVersion, _ manifest: ClientManifest) -> URL? {
-        return try? URL(string: manifest.clientDownload.unwrap().url)
+        guard let download = manifest.clientDownload, !download.url.isEmpty else { return nil }
+        return URL(string: download.url)
     }
     
     public func getLibraryURL(_ library: ClientManifest.Library) -> URL? {
@@ -48,7 +54,7 @@ public class BMCLAPIDownloadSource: DownloadSource {
     }
     
     public func getClientManifestURL(_ version: MinecraftVersion) -> URL? {
-        return URL(string: "https://bmclapi2.bangbang93.com/version/\(version.displayName)/json")!
+        URL(string: "https://bmclapi2.bangbang93.com/version/\(version.displayName)/json")
     }
     
     public func getAssetIndexURL(_ version: MinecraftVersion, _ manifest: ClientManifest) -> URL? {
@@ -56,15 +62,17 @@ public class BMCLAPIDownloadSource: DownloadSource {
               let url = URL(string: urlString) else {
             return nil
         }
-        return URL(string: "https://bmclapi2.bangbang93.com")!.appending(path: url.path)
+        guard let baseURL = URL(string: "https://bmclapi2.bangbang93.com") else { return nil }
+        return baseURL.appending(path: url.path)
     }
     
     public func getClientJARURL(_ version: MinecraftVersion, _ manifest: ClientManifest) -> URL? {
-        return URL(string: "https://bmclapi2.bangbang93.com/version/\(version.displayName)/client")!
+        URL(string: "https://bmclapi2.bangbang93.com/version/\(version.displayName)/client")
     }
     
     public func getLibraryURL(_ library: ClientManifest.Library) -> URL? {
         guard let path = library.artifact?.path, !path.isEmpty else { return nil }
-        return URL(string: "https://bmclapi2.bangbang93.com/maven")!.appending(path: path)
+        guard let baseURL = URL(string: "https://bmclapi2.bangbang93.com/maven") else { return nil }
+        return baseURL.appending(path: path)
     }
 }

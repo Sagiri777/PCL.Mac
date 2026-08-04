@@ -61,7 +61,7 @@ struct OtherSettingsView: View {
             .padding()
 
             StaticMyCard(index: 1, title: "下载") {
-                VStack {
+                VStack(alignment: .leading, spacing: 14) {
                     OptionStack("文件下载源") {
                         MyPicker(selected: $settings.fileDownloadSource, entries: [.mirror, .both, .official]) { option in
                             switch option {
@@ -81,6 +81,15 @@ struct OtherSettingsView: View {
                             }
                         }
                     }
+
+                    Divider()
+
+                    Toggle("无障碍：自动确认官方网页下载", isOn: $settings.accessibilityBrowserAutomationDownloadEnabled)
+                        .toggleStyle(.switch)
+                        .font(.system(size: 13))
+                    Text("默认关闭。开启后，仅对受限 CurseForge 队列中已验证的项目和文件使用内置浏览器自动打开官方下载页；不会自动登录或填写表单，文件仍须通过 SHA-1 校验后才会写入实例。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
                 .padding(18)
             }

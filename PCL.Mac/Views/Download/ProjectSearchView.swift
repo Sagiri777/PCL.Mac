@@ -197,8 +197,8 @@ struct ProjectListItem: View {
     /// 按 id 查类型，所以这段逻辑对每个受支持版本都有一次查表成本 —— 别放回 body。
     private static func makeSupportDescription(_ summary: ProjectSummary) -> String {
         var supportDescription = ""
-        if summary.loaders.count == 1 {
-            supportDescription.append("仅 \(summary.loaders.first!.getName())")
+        if summary.loaders.count == 1, let loader = summary.loaders.first {
+            supportDescription.append("仅 \(loader.getName())")
         } else if summary.loaders.count < 3 {
             supportDescription.append(summary.loaders.map { $0.rawValue.capitalized }.joined(separator: " / "))
         }
@@ -344,10 +344,11 @@ class ProjectSearchViewState: ObservableObject {
                         continue
                     }
                 } else {
-                    if let version = try? await ModrinthProjectSearcher.shared.getVersion(dependency.versionId!) {
+                    guard let dependencyVersionID = dependency.versionId else { continue }
+                    if let version = try? await ModrinthProjectSearcher.shared.getVersion(dependencyVersionID) {
                         pendingDownloadProjects.append(version)
                     } else {
-                        err("依赖 \(dependency.summary.modId) 版本 \(dependency.versionId!) 不存在")
+                        err("依赖 \(dependency.summary.modId) 版本 \(dependencyVersionID) 不存在")
                         continue
                     }
                 }

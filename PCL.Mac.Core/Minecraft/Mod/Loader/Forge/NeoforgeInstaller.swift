@@ -10,8 +10,8 @@ import ZIPFoundation
 import SwiftyJSON
 
 public class NeoforgeInstaller: ForgeInstaller {
-    override func getInstallerDownloadURL(_ minecraftVersion: MinecraftVersion, _ version: String) -> URL {
-        return URL(string: "https://bmclapi2.bangbang93.com/neoforge/version/\(version)/download/installer.jar")!
+    override func getInstallerDownloadURL(_ minecraftVersion: MinecraftVersion, _ version: String) -> URL? {
+        URL(string: "https://bmclapi2.bangbang93.com/neoforge/version/\(version)/download/installer.jar")
     }
     
     override func getGroupId() -> String { "net.neoforged" }

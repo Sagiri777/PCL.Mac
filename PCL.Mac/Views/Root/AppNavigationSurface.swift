@@ -4,6 +4,7 @@ import SwiftUI
 struct AppNavigationSurface: View {
     @ObservedObject private var router = DataManager.shared.router
     @ObservedObject private var settings = AppSettings.shared
+    @ObservedObject private var glassSettings = GlassSettings.shared
 
     var body: some View {
         Group {
@@ -19,22 +20,22 @@ struct AppNavigationSurface: View {
         ZStack {
             NativeFrostedWindowFrame()
             nativeInterior
-                .padding(settings.glassFrameWidth)
+                .padding(glassSettings.appearance.frameWidth)
             if settings.windowControlButtonStyle == .pcl {
                 HStack(spacing: 4) {
                     Spacer()
                     WindowControlButton.Miniaturize
                     WindowControlButton.Close
                 }
-                .padding(.top, max(5, settings.glassFrameWidth * 0.35))
-                .padding(.trailing, max(7, settings.glassFrameWidth * 0.45))
+                .padding(.top, max(5, glassSettings.appearance.frameWidth * 0.35))
+                .padding(.trailing, max(7, glassSettings.appearance.frameWidth * 0.45))
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
             } else {
                 TrafficLightControls(visibility: settings.trafficLightVisibility)
-                    .padding(.top, max(1, settings.glassFrameWidth * 0.14))
+                    .padding(.top, max(1, glassSettings.appearance.frameWidth * 0.14))
                     .padding(
                         settings.trafficLightPosition == .topLeft ? .leading : .trailing,
-                        max(2, settings.glassFrameWidth * 0.20)
+                        max(2, glassSettings.appearance.frameWidth * 0.20)
                     )
                     .frame(
                         maxWidth: .infinity,
@@ -87,20 +88,35 @@ struct AppNavigationSurface: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    @ViewBuilder
     private var nativeContentSurface: some View {
-        RoundedRectangle(cornerRadius: contentCornerRadius, style: .continuous)
-            .fill(nativeMaterial(for: settings.glassBackgroundBlurStrength))
-            .opacity((0.10 + settings.glassBackgroundBlurStrength * 0.62) * settings.glassSurfaceOpacity)
-            .overlay(settings.effectiveAccentColor.opacity(settings.glassTintStrength * 0.04))
-            .overlay {
-                RoundedRectangle(cornerRadius: contentCornerRadius, style: .continuous)
-                    .stroke(.white.opacity(0.04 + settings.glassHighlightStrength * 0.22), lineWidth: 0.7)
-            }
-            .shadow(
-                color: .black.opacity(settings.glassShadowStrength * 0.16),
-                radius: 3 + settings.glassShadowStrength * 8,
-                y: 2
+        let shape = RoundedRectangle(cornerRadius: contentCornerRadius, style: .continuous)
+        if let config = glassSettings.glassConfig {
+            LiquidGlassBackground(
+                role: .panel,
+                config: config,
+                blurStrength: glassSettings.appearance.backgroundBlurStrength,
+                surfaceOpacity: glassSettings.appearance.surfaceOpacity,
+                tintStrength: glassSettings.appearance.tintStrength,
+                highlightStrength: glassSettings.appearance.highlightStrength,
+                shadowStrength: glassSettings.appearance.shadowStrength,
+                interactive: glassSettings.appearance.interactiveEffects,
+                shape: shape
             )
+        } else {
+            shape
+                .fill(nativeMaterial(for: settings.glassBackgroundBlurStrength))
+                .opacity((0.10 + settings.glassBackgroundBlurStrength * 0.62) * settings.glassSurfaceOpacity)
+                .overlay(settings.effectiveAccentColor.opacity(settings.glassTintStrength * 0.04))
+                .overlay {
+                    shape.stroke(.white.opacity(0.04 + settings.glassHighlightStrength * 0.22), lineWidth: 0.7)
+                }
+                .shadow(
+                    color: .black.opacity(settings.glassShadowStrength * 0.16),
+                    radius: 3 + settings.glassShadowStrength * 8,
+                    y: 2
+                )
+        }
     }
 
     private var contentCornerRadius: Double {
@@ -120,6 +136,7 @@ struct AppNavigationSurface: View {
 private struct NativeLeftColumn: View {
     @ObservedObject private var dataManager = DataManager.shared
     @ObservedObject private var settings = AppSettings.shared
+    @ObservedObject private var glassSettings = GlassSettings.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var isContentVisible = true
@@ -128,7 +145,7 @@ private struct NativeLeftColumn: View {
         VStack(spacing: 0) {
             NativeMacSidebar()
                 .padding(.top, 44)
-            Divider().opacity(0.20 + settings.glassHighlightStrength * 0.20)
+            Divider().opacity(0.20 + glassSettings.appearance.highlightStrength * 0.20)
             dataManager.leftTabContent
                 .scaleEffect(isContentVisible ? 1 : 0.98)
                 .opacity(isContentVisible ? 1 : 0)
@@ -138,16 +155,31 @@ private struct NativeLeftColumn: View {
         .background(sidebarMaterial)
         .overlay(alignment: .trailing) {
             Rectangle()
-                .fill(.white.opacity(0.05 + settings.glassHighlightStrength * 0.20))
+                .fill(.white.opacity(0.05 + glassSettings.appearance.highlightStrength * 0.20))
                 .frame(width: 0.5)
         }
     }
 
+    @ViewBuilder
     private var sidebarMaterial: some View {
-        Rectangle()
-            .fill(material(for: settings.glassPanelBlurStrength))
-            .opacity((0.12 + settings.glassPanelBlurStrength * 0.72) * settings.glassSurfaceOpacity)
-            .overlay(settings.effectiveAccentColor.opacity(settings.glassTintStrength * 0.055))
+        if let config = glassSettings.glassConfig {
+            LiquidGlassBackground(
+                role: .panel,
+                config: config,
+                blurStrength: glassSettings.appearance.panelBlurStrength,
+                surfaceOpacity: glassSettings.appearance.surfaceOpacity,
+                tintStrength: glassSettings.appearance.tintStrength,
+                highlightStrength: glassSettings.appearance.highlightStrength,
+                shadowStrength: glassSettings.appearance.shadowStrength,
+                interactive: glassSettings.appearance.interactiveEffects,
+                shape: Rectangle()
+            )
+        } else {
+            Rectangle()
+                .fill(material(for: settings.glassPanelBlurStrength))
+                .opacity((0.12 + settings.glassPanelBlurStrength * 0.72) * settings.glassSurfaceOpacity)
+                .overlay(settings.effectiveAccentColor.opacity(settings.glassTintStrength * 0.055))
+        }
     }
 
     private func material(for strength: Double) -> Material {
@@ -209,27 +241,49 @@ private struct LegacyLeftColumn: View {
 
 private struct NativeFrostedWindowFrame: View {
     @ObservedObject private var settings = AppSettings.shared
+    @ObservedObject private var glassSettings = GlassSettings.shared
 
     private var shape: RoundedRectangle {
         RoundedRectangle(cornerRadius: settings.glassCornerRadius, style: .continuous)
     }
 
     var body: some View {
-        ZStack {
-            shape
-                .fill(frameMaterial)
-                .opacity(0.30 + settings.glassFrameBlurStrength * 0.68)
-            shape
-                .fill(settings.effectiveAccentColor.opacity(settings.glassTintStrength * 0.075))
-            frameHighlights
-        }
+        frameSurface
+            .overlay(frameHighlights)
         .shadow(
-            color: .black.opacity(0.08 + settings.glassShadowStrength * 0.30),
-            radius: 8 + settings.glassShadowStrength * 22,
-            y: 4 + settings.glassShadowStrength * 8
+            color: glassSettings.glassConfig == nil
+                ? .black.opacity(0.08 + settings.glassShadowStrength * 0.30)
+                : .clear,
+            radius: glassSettings.glassConfig == nil ? 8 + settings.glassShadowStrength * 22 : 0,
+            y: glassSettings.glassConfig == nil ? 4 + settings.glassShadowStrength * 8 : 0
         )
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+    }
+
+    @ViewBuilder
+    private var frameSurface: some View {
+        if let config = glassSettings.glassConfig {
+            LiquidGlassBackground(
+                role: .background,
+                config: config,
+                blurStrength: glassSettings.appearance.frameBlurStrength,
+                surfaceOpacity: glassSettings.appearance.surfaceOpacity,
+                tintStrength: glassSettings.appearance.tintStrength,
+                highlightStrength: glassSettings.appearance.highlightStrength,
+                shadowStrength: glassSettings.appearance.shadowStrength,
+                interactive: false,
+                shape: shape
+            )
+        } else {
+            ZStack {
+                shape
+                    .fill(frameMaterial)
+                    .opacity(0.30 + settings.glassFrameBlurStrength * 0.68)
+                shape
+                    .fill(settings.effectiveAccentColor.opacity(settings.glassTintStrength * 0.075))
+            }
+        }
     }
 
     private var frameMaterial: Material {
@@ -256,14 +310,14 @@ private struct NativeFrostedWindowFrame: View {
                     ),
                     lineWidth: 1.4
                 )
-            RoundedRectangle(cornerRadius: settings.glassInnerBorderCornerRadius, style: .continuous)
-                .inset(by: settings.glassFrameWidth - 0.8)
+            RoundedRectangle(cornerRadius: glassSettings.appearance.innerBorderCornerRadius, style: .continuous)
+                .inset(by: glassSettings.appearance.frameWidth - 0.8)
                 .stroke(
                     .black.opacity(0.04 + settings.glassShadowStrength * 0.13),
                     lineWidth: 1
                 )
-            RoundedRectangle(cornerRadius: settings.glassInnerBorderCornerRadius, style: .continuous)
-                .inset(by: settings.glassFrameWidth + 0.4)
+            RoundedRectangle(cornerRadius: glassSettings.appearance.innerBorderCornerRadius, style: .continuous)
+                .inset(by: glassSettings.appearance.frameWidth + 0.4)
                 .stroke(
                     .white.opacity(0.04 + settings.glassHighlightStrength * 0.22),
                     lineWidth: 0.8

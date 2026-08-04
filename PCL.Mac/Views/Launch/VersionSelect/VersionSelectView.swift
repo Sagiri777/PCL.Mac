@@ -60,12 +60,16 @@ struct VersionSelectView: View, SubRouteContainer {
                             panel.allowedContentTypes = [.folder]
                             
                             if panel.runModal() == .OK {
-                                guard !settings.minecraftDirectories.contains(where: { $0.rootURL == panel.url! }) else {
+                                guard let url = panel.url else {
+                                    hint("未选择有效文件夹！", .critical)
+                                    return
+                                }
+                                guard !settings.minecraftDirectories.contains(where: { $0.rootURL == url }) else {
                                     hint("该目录已存在！", .critical)
                                     return
                                 }
-                                settings.minecraftDirectories.append(.init(rootURL: panel.url!, name: "自定义目录"))
-                                settings.currentMinecraftDirectory = .init(rootURL: panel.url!, name: "自定义目录")
+                                settings.minecraftDirectories.append(.init(rootURL: url, name: "自定义目录"))
+                                settings.currentMinecraftDirectory = .init(rootURL: url, name: "自定义目录")
                                 hint("添加成功", .finish)
                             }
                         }
@@ -123,7 +127,7 @@ struct VersionSelectView: View, SubRouteContainer {
         panel.allowsMultipleSelection = true
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
-        panel.allowedContentTypes = [.zip, UTType(filenameExtension: "mrpack")!]
+        panel.allowedContentTypes = [.zip] + (UTType(filenameExtension: "mrpack").map { [$0] } ?? [])
         panel.prompt = "导入"
 
         guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }

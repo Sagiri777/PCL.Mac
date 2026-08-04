@@ -28,4 +28,14 @@ struct AppRouterTests {
         #expect(router.path == [.launch])
         #expect(!router.canGoBack)
     }
+
+    @Test func emptyPathFallsBackToLaunch() {
+        let router = AppRouter()
+        router.path = []
+
+        #expect(router.getLast() == .launch)
+        #expect(router.getRoot() == .launch)
+        router.removeLast()
+        #expect(router.path == [.launch])
+    }
 }

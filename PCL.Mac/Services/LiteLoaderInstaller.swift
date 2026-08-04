@@ -90,7 +90,9 @@ public enum LiteLoaderInstaller {
         try FileManager.default.createDirectory(at: versionDir, withIntermediateDirectories: true)
 
         // 1. 下载 jar
-        let downloadURL = URL(string: "\(version.repo.url)/com/mumfrey/liteloader/\(version.artefact)/\(version.artefact).jar")!
+        guard let downloadURL = URL(string: "\(version.repo.url)/com/mumfrey/liteloader/\(version.artefact)/\(version.artefact).jar") else {
+            throw MyLocalizedError(reason: "LiteLoader 下载地址无效")
+        }
         log("下载 LiteLoader: \(version.displayName)")
         try await SingleFileDownloader.download(url: downloadURL, destination: jarURL)
 

@@ -28,13 +28,14 @@ public class JavaSearch {
         let elapsed = Int((Date().timeIntervalSince1970 - before) * 1000)
 
         result.append(contentsOf: await loadCustomJVMs())
+        let finalResult = result
 
         await MainActor.run {
-            DataManager.shared.javaVirtualMachines = result
+            DataManager.shared.javaVirtualMachines = finalResult
             DataManager.shared.lastTimeUsed = elapsed
         }
-        log("搜索 Java 耗时 \(elapsed)ms，共 \(result.count) 项")
-        return result
+        log("搜索 Java 耗时 \(elapsed)ms，共 \(finalResult.count) 项")
+        return finalResult
     }
 
     /// 同步版本，仅保留给必须阻塞的调用点（如 CLI）。UI 路径请用 async 版本。

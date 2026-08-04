@@ -22,34 +22,35 @@ fileprivate struct ProjectVersionListView: View {
     var body: some View {
         VStack {
             ForEach(versionMap.platformKeys, id: \.self) { key in
-                let versions: [ProjectVersion] = versionMap[key]!
-                MyCard(title: getCardTitle(key.loader, key.minecraftVersion)) {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        if let version = versions.first,
-                           !version.dependencies.isEmpty {
-                            Text("前置资源")
-                                .font(.custom("PCL English", size: 14))
-                                .padding(4)
-                            ForEach(version.dependencies, id: \.self) { dependency in
-                                ProjectListItem(summary: dependency.summary)
+                if let versions = versionMap[key] {
+                    MyCard(title: getCardTitle(key.loader, key.minecraftVersion)) {
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            if let version = versions.first,
+                               !version.dependencies.isEmpty {
+                                Text("前置资源")
+                                    .font(.custom("PCL English", size: 14))
+                                    .padding(4)
+                                ForEach(version.dependencies, id: \.self) { dependency in
+                                    ProjectListItem(summary: dependency.summary)
+                                        .onTapGesture {
+                                            dataManager.router.append(.projectDownload(summary: dependency.summary))
+                                        }
+                                }
+                                Text("版本列表")
+                                    .font(.custom("PCL English", size: 14))
+                                    .padding(4)
+                            }
+                            ForEach(versions) { version in
+                                ProjectVersionListItem(version: version)
                                     .onTapGesture {
-                                        dataManager.router.append(.projectDownload(summary: dependency.summary))
+                                        state.addToQueue(version)
                                     }
                             }
-                            Text("版本列表")
-                                .font(.custom("PCL English", size: 14))
-                                .padding(4)
                         }
-                        ForEach(versions) { version in
-                            ProjectVersionListItem(version: version)
-                                .onTapGesture {
-                                    state.addToQueue(version)
-                                }
-                        }
+                        .padding(4)
                     }
-                    .padding(4)
+                    .padding()
                 }
-                .padding()
             }
         }
         .task(id: requestID) {
@@ -204,4 +205,3 @@ struct ProjectDownloadView: View {
         }
     }
 }
-

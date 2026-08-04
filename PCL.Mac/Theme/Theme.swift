@@ -100,7 +100,8 @@ public class Theme: Codable, Hashable, Equatable {
             let internalURL: URL = SharedConstants.shared.applicationResourcesURL.appending(path: "\(id).json")
             let externalURL: URL = SharedConstants.shared.applicationSupportURL.appending(path: "Themes").appending(path: "\(id).json")
 
-            let data = try FileHandle(forReadingFrom: FileManager.default.fileExists(atPath: internalURL.path) ? internalURL : externalURL).readToEnd()!
+            let fileURL = FileManager.default.fileExists(atPath: internalURL.path) ? internalURL : externalURL
+            let data = try Data(contentsOf: fileURL)
             let json = try JSON(data: data)
             return ThemeParser.shared.fromJSON(json)
         } catch {

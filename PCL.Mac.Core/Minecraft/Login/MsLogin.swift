@@ -45,11 +45,11 @@ public class MsLogin {
         do {
             clientID = try Secrets.getClientID()
         } catch {
-            await PopupManager.shared.show(.init(.error, "无法登录", error.localizedDescription, [.ok]))
+            PopupManager.shared.show(.init(.error, "无法登录", error.localizedDescription, [.ok]))
             return nil
         }
         guard !clientID.isEmpty else {
-            await PopupManager.shared.show(.init(.error, "无法登录",
+            PopupManager.shared.show(.init(.error, "无法登录",
                 "未配置 Microsoft OAuth client_id。请在 Settings > 账户 中查看说明。",
                 [.ok]))
             return nil
@@ -66,7 +66,7 @@ public class MsLogin {
 
         // 检查 HTTP 错误（device code 失败）
         if let err = response.error {
-            await PopupManager.shared.show(.init(.error, "登录请求失败",
+            PopupManager.shared.show(.init(.error, "登录请求失败",
                 "Microsoft OAuth 返回错误：\(err.localizedDescription)\n请检查 client_id 是否正确。",
                 [.ok]))
             return nil
@@ -75,7 +75,7 @@ public class MsLogin {
         guard let json = response.json else {
             // 解析响应
             let statusCode = (response.data?.count ?? 0) > 0 ? "请检查 client_id 配置。" : "网络异常"
-            await PopupManager.shared.show(.init(.error, "登录请求失败",
+            PopupManager.shared.show(.init(.error, "登录请求失败",
                 "Microsoft OAuth 返回空响应：\(statusCode)",
                 [.ok]))
             return nil
@@ -84,15 +84,15 @@ public class MsLogin {
         // 检查 OAuth 错误码
         if let errorCode = json["error"].string, !errorCode.isEmpty {
             let errorDesc = json["error_description"].stringValue
-            await PopupManager.shared.show(.init(.error, "登录被拒绝",
-                "\\(errorCode): \(errorDesc)",
+            PopupManager.shared.show(.init(.error, "登录被拒绝",
+                "\(errorCode): \(errorDesc)",
                 [.ok]))
             return nil
         }
 
         let authResponse = DeviceAuthResponse(json)
         guard !authResponse.deviceCode.isEmpty else {
-            await PopupManager.shared.show(.init(.error, "登录失败",
+            PopupManager.shared.show(.init(.error, "登录失败",
                 "Microsoft OAuth 返回的 device_code 为空。请检查 client_id 是否有效。",
                 [.ok]))
             return nil
@@ -123,7 +123,7 @@ public class MsLogin {
         )
         try? await notificationCenter.add(request)
 
-        await PopupManager.shared.show(.init(.normal, "登录 Minecraft", """
+        PopupManager.shared.show(.init(.normal, "登录 Minecraft", """
 登录网页将自动开启，请在网页中输入 \(authResponse.userCode)（已自动复制）。
 
 如果网络环境不佳，网页可能一直加载不出来，届时请使用使用加速器或 VPN 以改善网络环境。
@@ -140,45 +140,41 @@ public class MsLogin {
         let total = min(3600, max(1, Int(Double(max(1, deviceAuthResponse.expiresIn)) / Double(interval))))
         for i in 1...total {
             debug("轮询第 \(i) / \(total) 次")
-            do {
-                let clientID = Secrets.getClientIDOrEmpty()
-                let response = await Requests.post(
-                    "https://login.microsoftonline.com/consumers/oauth2/v2.0/token",
-                    body: [
-                        "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
-                        "client_id": clientID,
-                        "device_code": deviceAuthResponse.deviceCode
-                    ],
-                    encodeMethod: .urlEncoded
-                )
-                // 防御：response.json 可能为 nil（网络失败）；data 可能为 nil
-                guard let json = response.json else {
-                    if let error = response.error {
-                        err("轮询请求失败: \(error.localizedDescription)")
-                    } else {
-                        err("轮询请求失败: 无响应数据")
-                    }
-                    try? await Task.sleep(for: .seconds(interval))
-                    continue
+            let clientID = Secrets.getClientIDOrEmpty()
+            let response = await Requests.post(
+                "https://login.microsoftonline.com/consumers/oauth2/v2.0/token",
+                body: [
+                    "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+                    "client_id": clientID,
+                    "device_code": deviceAuthResponse.deviceCode
+                ],
+                encodeMethod: .urlEncoded
+            )
+            // 防御：response.json 可能为 nil（网络失败）；data 可能为 nil
+            guard let json = response.json else {
+                if let error = response.error {
+                    err("轮询请求失败: \(error.localizedDescription)")
+                } else {
+                    err("轮询请求失败: 无响应数据")
                 }
-                if let accessToken = json["access_token"].string,
-                   let refreshToken = json["refresh_token"].string {
-                    return .init(accessToken: accessToken, refreshToken: refreshToken)
-                }
-                // 检查错误码（authorization_pending 等）
-                let errorCode = json["error"].stringValue
-                if errorCode == "authorization_declined" || errorCode == "access_denied" {
-                    err("用户拒绝授权")
-                    return nil
-                }
-                if errorCode == "expired_token" {
-                    err("设备码已过期")
-                    return nil
-                }
-                // authorization_pending / 其他：继续轮询
-            } catch {
-                err("轮询异常: \(error.localizedDescription)")
+                try? await Task.sleep(for: .seconds(interval))
+                continue
             }
+            if let accessToken = json["access_token"].string,
+               let refreshToken = json["refresh_token"].string {
+                return .init(accessToken: accessToken, refreshToken: refreshToken)
+            }
+            // 检查错误码（authorization_pending 等）
+            let errorCode = json["error"].stringValue
+            if errorCode == "authorization_declined" || errorCode == "access_denied" {
+                err("用户拒绝授权")
+                return nil
+            }
+            if errorCode == "expired_token" {
+                err("设备码已过期")
+                return nil
+            }
+            // authorization_pending / 其他：继续轮询
             try? await Task.sleep(for: .seconds(interval))
         }
         err("轮询已结束，但没有获取到 Access Token")
@@ -471,7 +467,7 @@ extension MsLogin {
         }
 
         // 4. 弹原生提示
-        await PopupManager.shared.show(.init(.normal, "登录 Minecraft", """
+        PopupManager.shared.show(.init(.normal, "登录 Minecraft", """
 登录网页已自动开启，请在网页中输入 \(userCode)（已自动复制）。
 
 如果网页一直加载不出来，请使用加速器或 VPN 改善网络环境。

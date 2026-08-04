@@ -28,26 +28,27 @@ struct PCL_MacApp: App {
     }
 }
 
-struct WindowAccessor: NSViewRepresentable {
+public struct WindowAccessor: NSViewRepresentable {
     @ObservedObject private var settings = AppSettings.shared
 
-    func makeCoordinator() -> Coordinator { Coordinator() }
+    public func makeCoordinator() -> Coordinator { Coordinator() }
 
-    func makeNSView(context: Context) -> NSView {
+    public func makeNSView(context: Context) -> NSView {
         let view = NSView()
         DispatchQueue.main.async { configure(view.window, coordinator: context.coordinator) }
         return view
     }
 
-    func updateNSView(_ nsView: NSView, context: Context) {
+    public func updateNSView(_ nsView: NSView, context: Context) {
         // 仅在 appearanceRevision 真正变化时重新配置窗口，
         // 避免父 view（订阅 AppSettings 的 ContentView）每次重渲都触发
         // frame 重算 / traffic light 重新布局。
+        guard let window = nsView.window else { return }
         guard context.coordinator.lastAppearanceRevision != settings.appearanceRevision else {
             return
         }
         context.coordinator.lastAppearanceRevision = settings.appearanceRevision
-        configure(nsView.window, coordinator: context.coordinator)
+        configure(window, coordinator: context.coordinator)
     }
 
     private func configure(_ window: NSWindow?, coordinator: Coordinator) {
@@ -64,7 +65,7 @@ struct WindowAccessor: NSViewRepresentable {
             window.toolbarStyle = .unified
             coordinator.hideSystemTrafficLights(window)
         } else {
-            coordinator.leaveGlassMode()
+            coordinator.leaveGlassMode(window: window)
             // miniaturizable 只对带标题栏的窗口生效。保留透明的系统标题栏能力，
             // 视觉仍由应用自绘，窗口服务器则能正常创建 Dock 最小化 counterpart。
             window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
@@ -80,34 +81,47 @@ struct WindowAccessor: NSViewRepresentable {
         coordinator.observeWindowLifecycle(window)
     }
 
-    final class Coordinator {
+    public final class Coordinator {
         private var appliedFrameWidth: Double?
+        private var appliedFrameAdjustment: Double = 0
         private weak var observedWindow: NSWindow?
         private var windowObservers: [NSObjectProtocol] = []
         /// 记录上次 configure 时的 appearanceRevision，避免重复 configure。
         var lastAppearanceRevision: UInt = UInt.max
 
+        public init() {}
+
         deinit {
             removeWindowObservers()
         }
 
-        func enterGlassMode(window: NSWindow, frameWidth: Double) {
-            let old = appliedFrameWidth ?? frameWidth
-            let delta = frameWidth - old
+        public func enterGlassMode(window: NSWindow, frameWidth: Double) {
+            let normalizedFrameWidth = max(0, frameWidth)
+            let old = appliedFrameWidth ?? normalizedFrameWidth
+            let delta = normalizedFrameWidth - old
             if abs(delta) > 0.1 {
-                var frame = window.frame
-                frame.origin.x -= delta
-                frame.origin.y -= delta
-                frame.size.width += delta * 2
-                frame.size.height += delta * 2
-                window.setFrame(frame, display: true, animate: false)
+                adjustFrame(window, by: delta)
+                appliedFrameAdjustment += delta
             }
-            appliedFrameWidth = frameWidth
+            appliedFrameWidth = normalizedFrameWidth
             window.contentView?.layer?.masksToBounds = false
         }
 
-        func leaveGlassMode() {
+        public func leaveGlassMode(window: NSWindow) {
+            if abs(appliedFrameAdjustment) > 0.1 {
+                adjustFrame(window, by: -appliedFrameAdjustment)
+            }
+            appliedFrameAdjustment = 0
             appliedFrameWidth = nil
+        }
+
+        private func adjustFrame(_ window: NSWindow, by inset: Double) {
+            var frame = window.frame
+            frame.origin.x -= inset
+            frame.origin.y -= inset
+            frame.size.width += inset * 2
+            frame.size.height += inset * 2
+            window.setFrame(frame, display: true, animate: false)
         }
 
         func hideSystemTrafficLights(_ window: NSWindow) {
