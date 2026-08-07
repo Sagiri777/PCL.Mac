@@ -8,7 +8,7 @@
 
 ## 当前版本
 
-- Release: `v2.0.0`
+- Release: `v2.0.1`
 - 系统要求: macOS 14.0+
 - 构建产物: 分别面向 Apple Silicon（arm64）与 Intel Mac（x86_64）的 ad-hoc 签名 `.app` 压缩包
 

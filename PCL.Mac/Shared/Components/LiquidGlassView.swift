@@ -73,7 +73,11 @@ public struct LiquidGlassBackground<S: InsettableShape>: View {
                     .interactive(interactive && role != .background),
                 in: shape
             )
-            .opacity(surfaceOpacity)
+            // glassEffect 自己负责背景采样和模糊。这里不能再把“模糊强度”
+            // 乘进整层 opacity，否则较低的模糊设置会同时让窗口几乎透明。
+            .opacity(GlassRenderingMetrics.nativeSurfaceOpacity(
+                surfaceOpacityMultiplier: surfaceOpacityMultiplier
+            ))
             .overlay(highlightBorder)
             .shadow(color: borderColor.opacity(shadowOpacity), radius: shadowRadius, y: 1)
     }
@@ -81,7 +85,10 @@ public struct LiquidGlassBackground<S: InsettableShape>: View {
     private var swiftUIMaterialFallback: some View {
         shape
             .fill(fallbackMaterial)
-            .opacity(surfaceOpacity)
+            .opacity(GlassRenderingMetrics.fallbackSurfaceOpacity(
+                effectiveStrength: effectiveStrength,
+                surfaceOpacityMultiplier: surfaceOpacityMultiplier
+            ))
             .overlay(shape.fill(tintColor.opacity(tintOpacity)))
             .overlay(highlightBorder)
             .shadow(color: borderColor.opacity(shadowOpacity), radius: shadowRadius, y: 1)
@@ -122,10 +129,6 @@ public struct LiquidGlassBackground<S: InsettableShape>: View {
         return .thickMaterial
     }
 
-    private var surfaceOpacity: Double {
-        (0.12 + effectiveStrength * 0.88) * surfaceOpacityMultiplier
-    }
-
     private var tintColor: Color {
         config.tintColor ?? Color(hex: 0x0A84FF)
     }
@@ -148,6 +151,20 @@ public struct LiquidGlassBackground<S: InsettableShape>: View {
 
     private var shadowRadius: Double {
         (2 + effectiveStrength * 6) * (0.35 + shadowStrength * 0.65)
+    }
+}
+
+enum GlassRenderingMetrics {
+    static func nativeSurfaceOpacity(surfaceOpacityMultiplier: Double) -> Double {
+        surfaceOpacityMultiplier.clamped(to: 0...1)
+    }
+
+    static func fallbackSurfaceOpacity(
+        effectiveStrength: Double,
+        surfaceOpacityMultiplier: Double
+    ) -> Double {
+        (0.12 + effectiveStrength.clamped(to: 0...1) * 0.88)
+            * surfaceOpacityMultiplier.clamped(to: 0...1)
     }
 }
 

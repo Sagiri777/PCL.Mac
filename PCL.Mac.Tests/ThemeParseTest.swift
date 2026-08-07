@@ -58,6 +58,20 @@ struct ThemeParseTest {
         #expect(state.cornerRadius == 0)
     }
 
+    @Test func nativeGlassOpacityDoesNotChangeWithBlurStrength() {
+        let surfaceOpacity = 0.70
+        let nativeOpacity = GlassRenderingMetrics.nativeSurfaceOpacity(
+            surfaceOpacityMultiplier: surfaceOpacity
+        )
+        let lowBlurFallbackOpacity = GlassRenderingMetrics.fallbackSurfaceOpacity(
+            effectiveStrength: 0.15,
+            surfaceOpacityMultiplier: surfaceOpacity
+        )
+
+        #expect(nativeOpacity == surfaceOpacity)
+        #expect(lowBlurFallbackOpacity < nativeOpacity)
+    }
+
     @Test @MainActor func glassAppearanceRefreshesAfterSchemeAndSliderChanges() {
         let settings = AppSettings.shared
         let glass = GlassSettings.shared
