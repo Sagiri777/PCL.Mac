@@ -6,8 +6,8 @@
 import SwiftUI
 import WebKit
 
-/// A bounded queue of CurseForge pages. It remains user-driven by default;
-/// an explicitly enabled accessibility mode can open the exact official file
+/// A bounded queue of CurseForge pages. It remains user-driven by default; an
+/// explicitly enabled accessibility mode can open the exact official file
 /// route already bound to each queued item.
 struct OfficialWebDownloadView: View {
     @ObservedObject var coordinator: OfficialWebDownloadCoordinator
@@ -181,7 +181,7 @@ private struct OfficialWebDownloadWebView: NSViewRepresentable {
         private weak var coordinator: OfficialWebDownloadCoordinator?
         private var activeDownload: WKDownload?
         private var attempt: OfficialWebDownloadAttempt?
-        private var userDownloadAuthorization: OfficialWebDownloadUserAuthorization?
+        private var projectDownloadAuthorization: OfficialWebDownloadProjectAuthorization?
         private var browserAutomationAuthorization: OfficialWebDownloadBrowserAutomationAuthorization?
         private var pendingDownloadSourceURL: URL?
 
@@ -220,38 +220,27 @@ private struct OfficialWebDownloadWebView: NSViewRepresentable {
             decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
         ) {
             let sourceURL = navigationAction.sourceFrame.request.url
-            let sourceIsExpectedProject = sourceURL.map {
-                CurseForgeURLPolicy.isSameOfficialProjectPage($0, as: expectedProjectPageURL)
-            } == true
-            let isExplicitProjectLink = navigationAction.navigationType == .linkActivated
-                && sourceIsExpectedProject
-            if isExplicitProjectLink, let sourceURL {
-                userDownloadAuthorization = .init(
-                    projectPageURL: sourceURL,
-                    originalRequestURL: navigationAction.request.url,
-                    issuedAtUptime: ProcessInfo.processInfo.systemUptime
-                )
-                pendingDownloadSourceURL = sourceURL
+            if let authorization = OfficialWebDownloadProjectAuthorization.issue(
+                from: sourceURL,
+                requestURL: navigationAction.request.url,
+                navigationType: navigationAction.navigationType,
+                expectedProjectPageURL: expectedProjectPageURL
+            ) {
+                projectDownloadAuthorization = authorization
+                pendingDownloadSourceURL = authorization.projectPageURL
             } else if navigationAction.navigationType == .linkActivated {
-                userDownloadAuthorization = nil
+                projectDownloadAuthorization = nil
                 pendingDownloadSourceURL = nil
             }
             guard #unavailable(macOS 15.2) else {
-                if !isExplicitProjectLink, sourceIsExpectedProject {
-                    pendingDownloadSourceURL = sourceURL
-                }
                 decisionHandler(navigationAction.shouldPerformDownload ? .download : .allow)
                 return
             }
 
-            if !isExplicitProjectLink, navigationAction.navigationType != .other {
-                userDownloadAuthorization = nil
-                pendingDownloadSourceURL = nil
-            }
             if navigationAction.shouldPerformDownload {
-                let hasManualAuthorization = userDownloadAuthorization?.isValid(for: expectedProjectPageURL) == true
+                let hasProjectAuthorization = projectDownloadAuthorization?.isValid(for: expectedProjectPageURL) == true
                 let hasBrowserAutomationAuthorization = browserAutomationAuthorization?.isValid(for: expectedProjectPageURL) == true
-                guard hasManualAuthorization || hasBrowserAutomationAuthorization else {
+                guard hasProjectAuthorization || hasBrowserAutomationAuthorization else {
                     coordinator?.pageFailed(
                         for: groupID,
                         reloadID: reloadID,
@@ -275,7 +264,7 @@ private struct OfficialWebDownloadWebView: NSViewRepresentable {
                 pendingDownloadSourceURL = nil
                 if let responseURL = navigationResponse.response.url,
                    !CurseForgeURLPolicy.isSameOfficialProjectPage(responseURL, as: expectedProjectPageURL) {
-                    userDownloadAuthorization = nil
+                    projectDownloadAuthorization = nil
                 }
             }
             decisionHandler(navigationResponse.canShowMIMEType ? .allow : .download)
@@ -292,7 +281,7 @@ private struct OfficialWebDownloadWebView: NSViewRepresentable {
         private func configure(_ download: WKDownload, in webView: WKWebView, sourceURL: URL?) {
             let initiatingSourceURL = sourceURL ?? pendingDownloadSourceURL
             pendingDownloadSourceURL = nil
-            let recentUserAuthorization = userDownloadAuthorization.flatMap { authorization in
+            let recentProjectAuthorization = projectDownloadAuthorization.flatMap { authorization in
                 authorization.isValid(for: expectedProjectPageURL) ? authorization : nil
             }
             let recentBrowserAutomationAuthorization = browserAutomationAuthorization.flatMap { authorization in
@@ -312,7 +301,7 @@ private struct OfficialWebDownloadWebView: NSViewRepresentable {
                     CurseForgeURLPolicy.isSameOfficialProjectPage($0, as: expectedProjectPageURL)
                 } == true
                 guard sourceIsExpectedProject
-                    || recentUserAuthorization != nil
+                    || recentProjectAuthorization != nil
                     || recentBrowserAutomationAuthorization != nil else {
                     download.cancel { _ in }
                     coordinator?.pageFailed(
@@ -322,32 +311,21 @@ private struct OfficialWebDownloadWebView: NSViewRepresentable {
                     )
                     return
                 }
-                guard download.isUserInitiated
-                    || recentUserAuthorization != nil
-                    || recentBrowserAutomationAuthorization != nil else {
-                    download.cancel { _ in }
-                    coordinator?.pageFailed(
-                        for: groupID,
-                        reloadID: reloadID,
-                        error: OfficialWebDownloadError.downloadFailed("只接受用户在官方页面手动触发的下载。")
-                    )
-                    return
-                }
             } else {
-                guard recentUserAuthorization != nil || recentBrowserAutomationAuthorization != nil else {
+                guard recentProjectAuthorization != nil || recentBrowserAutomationAuthorization != nil else {
                     download.cancel { _ in }
                     coordinator?.pageFailed(
                         for: groupID,
                         reloadID: reloadID,
-                        error: OfficialWebDownloadError.downloadFailed("无法确认该下载由当前官方项目页的手动链接触发。")
+                        error: OfficialWebDownloadError.downloadFailed("无法确认该下载由当前官方项目页发起。")
                     )
                     return
                 }
             }
-            // One manual click or one accessibility automation run authorizes
-            // at most one WebKit download attempt. The expected SHA-1 remains
-            // the final binding to the queued file.
-            userDownloadAuthorization = nil
+            // One project-page navigation or one accessibility automation run
+            // authorizes at most one WebKit download attempt. The expected
+            // SHA-1 remains the final binding to the queued file.
+            projectDownloadAuthorization = nil
             browserAutomationAuthorization = nil
             guard let coordinator,
                   let attempt = coordinator.stagingDestination(for: groupID, download: download) else {
@@ -393,7 +371,7 @@ private struct OfficialWebDownloadWebView: NSViewRepresentable {
 
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
             pendingDownloadSourceURL = nil
-            userDownloadAuthorization = nil
+            projectDownloadAuthorization = nil
             browserAutomationAuthorization = nil
             coordinator?.pageFailed(for: groupID, reloadID: reloadID, error: error)
         }

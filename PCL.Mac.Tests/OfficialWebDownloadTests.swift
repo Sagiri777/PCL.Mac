@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import WebKit
 @testable import PCL_Mac
 
 struct OfficialWebDownloadTests {
@@ -30,9 +31,9 @@ struct OfficialWebDownloadTests {
         ))
     }
 
-    @Test func manualClickAuthorizationSurvivesOfficialCountdownAndExpires() {
+    @Test func projectPageAuthorizationSurvivesOfficialCountdownAndExpires() {
         let expected = URL(string: "https://www.curseforge.com/minecraft/mc-mods/jei")!
-        let authorization = OfficialWebDownloadUserAuthorization(
+        let authorization = OfficialWebDownloadProjectAuthorization(
             projectPageURL: expected.appending(path: "files/123"),
             originalRequestURL: expected.appending(path: "download/123"),
             issuedAtUptime: 100
@@ -44,6 +45,27 @@ struct OfficialWebDownloadTests {
             nowUptime: 105
         ))
         #expect(!authorization.isValid(for: expected, nowUptime: 161))
+    }
+
+    @Test func projectPageAuthorizationDoesNotRequireClickClassification() {
+        let expected = URL(string: "https://www.curseforge.com/minecraft/mc-mods/jei")!
+        let source = expected.appending(path: "files/123")
+        let request = expected.appending(path: "download/123")
+
+        #expect(OfficialWebDownloadProjectAuthorization.issue(
+            from: source,
+            requestURL: request,
+            navigationType: .other,
+            expectedProjectPageURL: expected,
+            issuedAtUptime: 100
+        ) != nil)
+        #expect(OfficialWebDownloadProjectAuthorization.issue(
+            from: URL(string: "https://www.curseforge.com/minecraft/mc-mods/other-project")!,
+            requestURL: request,
+            navigationType: .linkActivated,
+            expectedProjectPageURL: expected,
+            issuedAtUptime: 100
+        ) == nil)
     }
 
     @Test func accessibilityBrowserAutomationUsesOnlyTheQueueBoundOfficialFileRoute() {

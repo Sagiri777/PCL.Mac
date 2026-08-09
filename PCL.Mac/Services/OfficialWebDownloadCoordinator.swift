@@ -2,9 +2,9 @@
 //  OfficialWebDownloadCoordinator.swift
 //  PCL.Mac
 //
-//  Receives downloads from a CurseForge page. The normal path remains an
-//  explicit user click; a separately enabled accessibility mode may ask the
-//  embedded browser to open the exact, trusted file route for a queued item.
+//  Receives downloads from a CurseForge page. The normal path remains
+//  user-driven; a separately enabled accessibility mode may ask the embedded
+//  browser to open the exact, trusted file route for a queued item.
 //
 
 import Combine
@@ -109,16 +109,35 @@ enum CurseForgeURLPolicy {
     }
 }
 
-/// A short-lived, one-shot authorization created by an explicit link click on
-/// the queued project page. CurseForge may render a countdown page and start
-/// the real download later, at which point WebKit no longer reports the
-/// download itself as immediately user initiated.
-struct OfficialWebDownloadUserAuthorization: Sendable {
+/// A short-lived, one-shot authorization created when the queued project page
+/// starts a navigation. CurseForge may render a countdown page, use script or
+/// redirect before starting the real download, so WebKit's click and
+/// `isUserInitiated` classifications are intentionally not part of this trust
+/// decision.
+struct OfficialWebDownloadProjectAuthorization: Sendable {
     static let validityWindow: TimeInterval = 60
 
     let projectPageURL: URL
     let originalRequestURL: URL?
     let issuedAtUptime: TimeInterval
+
+    static func issue(
+        from sourceURL: URL?,
+        requestURL: URL?,
+        navigationType _: WKNavigationType,
+        expectedProjectPageURL: URL,
+        issuedAtUptime: TimeInterval = ProcessInfo.processInfo.systemUptime
+    ) -> Self? {
+        guard let sourceURL,
+              CurseForgeURLPolicy.isSameOfficialProjectPage(sourceURL, as: expectedProjectPageURL) else {
+            return nil
+        }
+        return .init(
+            projectPageURL: sourceURL,
+            originalRequestURL: requestURL,
+            issuedAtUptime: issuedAtUptime
+        )
+    }
 
     func isValid(
         for expectedProjectPageURL: URL,
@@ -458,9 +477,9 @@ private final class OfficialWebDownloadPlacementPermit: @unchecked Sendable {
     }
 }
 
-/// Identifies one concrete user-initiated WebKit download attempt. Delegates
-/// must echo this value back so a late callback from a reloaded page cannot
-/// affect the replacement attempt for the same queue item.
+/// Identifies one concrete WebKit download attempt. Delegates must echo this
+/// value back so a late callback from a reloaded page cannot affect the
+/// replacement attempt for the same queue item.
 struct OfficialWebDownloadAttempt: Hashable {
     let id: UUID
     let stagingURL: URL
