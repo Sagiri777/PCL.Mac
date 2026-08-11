@@ -47,6 +47,7 @@ enum PopupType {
 }
 
 struct PopupOverlay: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject private var popupManager: PopupManager = .shared
     
     @State private var stateNoAnim: PopupAnimationState = PopupManager.shared.popupState
@@ -93,9 +94,9 @@ struct PopupOverlay: View {
             }
             .frame(width: width, height: height)
         }
-        .rotationEffect(popupManager.popupState.getRotation(), anchor: stateNoAnim.getRotationAnchor())
+        .rotationEffect(reduceMotion ? .zero : popupManager.popupState.getRotation(), anchor: stateNoAnim.getRotationAnchor())
         .opacity(popupManager.popupState == .popped ? 1 : 0)
-        .animation(.spring(response: 0.5, dampingFraction: 0.6, blendDuration: 0), value: popupManager.popupState)
+        .animation(reduceMotion ? nil : .spring(response: 0.5, dampingFraction: 0.6, blendDuration: 0), value: popupManager.popupState)
         .onAppear {
             popupManager.popupState = .popped
         }

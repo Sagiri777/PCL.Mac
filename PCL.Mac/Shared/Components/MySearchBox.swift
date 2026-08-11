@@ -8,6 +8,7 @@
 import SwiftUI
 
 struct MySearchBox: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Binding private var query: String
     @FocusState private var isFocused: Bool
     @State private var isClearHovered: Bool = false
@@ -38,7 +39,7 @@ struct MySearchBox: View {
                         .foregroundStyle(Color(hex: 0x8C8C8C))
                 }
                 .focused($isFocused)
-                .font(.custom("PCL English", size: 16))
+                .font(.system(size: 16))
                 .textFieldStyle(.plain)
                 .onChange(of: query) {
                     if query.count > 50 {
@@ -72,8 +73,8 @@ struct MySearchBox: View {
                     .transition(.opacity)
                 }
             }
-            .animation(.easeInOut(duration: 0.15), value: query.isEmpty)
-            .animation(.easeInOut(duration: 0.15), value: isFocused)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: query.isEmpty)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: isFocused)
         }
         .frame(height: 40)
         .padding(.bottom, -7)
@@ -99,8 +100,6 @@ struct MySearchBox: View {
 }
 
 #Preview {
-    MySearchBox(query: .constant("a"), placeholder: "搜索 Mod 在输入框中按下 Enter 以进行搜索") { query in
-        print(query)
-    }
+    MySearchBox(query: .constant("a"), placeholder: "搜索 Mod 在输入框中按下 Enter 以进行搜索") { _ in }
     .padding()
 }

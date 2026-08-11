@@ -12,6 +12,7 @@ struct VersionListView: View {
     let minecraftDirectory: MinecraftDirectory
     
     struct VersionView: View, Identifiable {
+        @Environment(\.accessibilityReduceMotion) private var reduceMotion
         @State private var isHovered: Bool = false
         private let instanceInfo: InstanceInfo
 
@@ -24,50 +25,55 @@ struct VersionListView: View {
 
 
         var body: some View {
-            MyListItem {
-                HStack {
-                    Image(instanceInfo.icon)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: 35)
-                        .padding(.leading, 5)
-                    VStack(alignment: .leading) {
-                        Text(instanceInfo.name)
-                            .font(.custom("PCL English", size: 14))
-                            .foregroundStyle(Color("TextColor"))
-                            .padding(.top, 5)
-                        Text(instanceInfo.version.displayName)
-                            .font(.custom("PCL English", size: 14))
-                            .foregroundStyle(Color(hex: 0x7F8790))
-                            .padding(.bottom, 5)
-                    }
-                    Spacer()
-                    if isHovered {
+            ZStack(alignment: .trailing) {
+                Button {
+                    AppSettings.shared.defaultInstance = instanceInfo.name
+                    DataManager.shared.router.setRoot(.launch)
+                } label: {
+                    MyListItem {
                         HStack {
-                            Image(systemName: "xmark")
+                            Image(instanceInfo.icon)
                                 .resizable()
                                 .scaledToFit()
-                                .frame(width: 10)
-                                .bold()
-                                .foregroundStyle(AppSettings.shared.theme.getTextStyle())
-                                .contentShape(Rectangle())
-                                .onTapGesture {
-                                    deleteInstance()
-                                }
+                                .frame(width: 35)
+                                .padding(.leading, 5)
+                            VStack(alignment: .leading) {
+                                Text(instanceInfo.name)
+                                    .font(.system(size: 14))
+                                    .foregroundStyle(Color("TextColor"))
+                                    .padding(.top, 5)
+                                Text(instanceInfo.version.displayName)
+                                    .font(.system(size: 14))
+                                    .foregroundStyle(Color(hex: 0x7F8790))
+                                    .padding(.bottom, 5)
+                            }
+                            Spacer()
+                            Color.clear.frame(width: 38)
                         }
-                        .padding(.trailing, 12)
                     }
                 }
-            }
-            .onTapGesture {
-                AppSettings.shared.defaultInstance = instanceInfo.name
-                DataManager.shared.router.setRoot(.launch)
+                .buttonStyle(.plain)
+                .accessibilityLabel("选择版本 \(instanceInfo.name)，Minecraft \(instanceInfo.version.displayName)")
+
+                if isHovered {
+                    Button(action: deleteInstance) {
+                        Image(systemName: "xmark")
+                            .bold()
+                            .frame(width: 28, height: 28)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(AppSettings.shared.theme.getTextStyle())
+                    .padding(.trailing, 8)
+                    .help("删除版本")
+                    .accessibilityLabel("删除版本 \(instanceInfo.name)")
+                }
             }
             .padding(.top, -8)
             .onHover { isHovered in
                 self.isHovered = isHovered
             }
-            .animation(.easeInOut(duration: 0.2), value: isHovered)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: isHovered)
         }
         
         private func deleteInstance() {

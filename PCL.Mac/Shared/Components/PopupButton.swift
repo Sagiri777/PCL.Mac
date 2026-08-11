@@ -24,7 +24,9 @@ struct PopupButton: View {
     }
     
     var body: some View {
-        ZStack {
+        Button {
+            PopupManager.shared.onClick(id: model.id)
+        } label: {
             Text(model.label)
                 .foregroundStyle(color)
                 .overlay(
@@ -35,9 +37,6 @@ struct PopupButton: View {
                                 .onHover { hovering in
                                     self.isHovered = hovering
                                 }
-                                .onTapGesture {
-                                    PopupManager.shared.onClick(id: model.id)
-                                }
                         )
                         .frame(height: 30)
                         .padding(.leading, -10)
@@ -45,6 +44,8 @@ struct PopupButton: View {
                         .frame(minWidth: 0, maxWidth: .infinity)
                 )
         }
+        .buttonStyle(.plain)
+        .accessibilityLabel(model.label)
         .animation(.easeInOut(duration: 0.2), value: isHovered)
     }
 }

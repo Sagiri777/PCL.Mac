@@ -12,6 +12,7 @@ import SwiftUI
 /// 导航、弹窗、提示和登录各自订阅自己的状态，避免任意一个高频状态变化都让
 /// 当前路由页面和整套 Liquid Glass 背景重新求值。
 struct ContentView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isGlobalDropHovering = false
 
     var body: some View {
@@ -31,7 +32,7 @@ struct ContentView: View {
             }
             return true
         } isTargeted: { hovering in
-            withAnimation(.easeInOut(duration: 0.15)) {
+            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.15)) {
                 isGlobalDropHovering = hovering
             }
         }

@@ -19,7 +19,7 @@ struct ToolboxView: View {
         ScrollView {
             StaticMyCard(title: "下载自定义文件") {
                 VStack {
-                    Text("使用 PCL.Mac 的高速多线程下载引擎下载任意文件。请注意，部分网站（例如百度网盘）可能还会报错 (403) 已禁止，无法正常下载。\n注：自定义下载进度获取暂未完成，所以显示 0.0% 是正常的！")
+                    Text("使用 PCL.Mac 的多线程下载引擎下载 HTTP/HTTPS 文件。需要登录、验证码或防盗链的网站可能拒绝直接下载。")
                     CustomDownloadOption(label: "下载地址", $downloadURL) { urlString in
                         if let scheme = URL(string: urlString)?.scheme, scheme == "http" || scheme == "https" {
                             return ""
@@ -38,8 +38,7 @@ struct ToolboxView: View {
                             }
                             return isValid ? "" : "无效的保存位置！"
                         }
-                        Text("选择")
-                            .onTapGesture {
+                        Button("选择…") {
                                 let panel = NSOpenPanel()
                                 panel.canChooseFiles = false
                                 panel.canChooseDirectories = true
@@ -51,6 +50,7 @@ struct ToolboxView: View {
                                     settings.customFilesSaveURL = url
                                 }
                             }
+                            .accessibilityHint("选择自定义下载的保存文件夹")
                             .onChange(of: settings.customFilesSaveURL) {
                                 customFilesSaveURL = settings.customFilesSaveURL.path
                             }

@@ -15,6 +15,7 @@ public enum GlassRole {
 }
 
 public struct LiquidGlassBackground<S: InsettableShape>: View {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     private let role: GlassRole
     private let config: GlassConfig
     private let blurStrength: Double
@@ -53,7 +54,9 @@ public struct LiquidGlassBackground<S: InsettableShape>: View {
         // 窗口、侧栏和内容表面则使用 macOS 26 的原生实现；旧系统以及卡片
         // 保持 Material 回退，保证 macOS 14+ 的行为和性能边界稳定。
         Group {
-            if #available(macOS 26.0, *), role != .card {
+            if reduceTransparency {
+                opaqueAccessibilityFallback
+            } else if #available(macOS 26.0, *), role != .card {
                 nativeLiquidGlass
             } else {
                 swiftUIMaterialFallback
@@ -61,6 +64,13 @@ public struct LiquidGlassBackground<S: InsettableShape>: View {
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+    }
+
+    private var opaqueAccessibilityFallback: some View {
+        shape
+            .fill(Color("MyCardBackgroundColor").opacity(role == .background ? 1 : 0.96))
+            .overlay(highlightBorder)
+            .shadow(color: borderColor.opacity(0.08), radius: 3, y: 1)
     }
 
     @available(macOS 26.0, *)

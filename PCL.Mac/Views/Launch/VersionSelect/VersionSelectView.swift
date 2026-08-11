@@ -51,8 +51,7 @@ struct VersionSelectView: View, SubRouteContainer {
                         .padding(.leading, 12)
                         .padding(.top, 20)
                         .padding(.bottom, 4)
-                    LeftTabItem(image: Image(systemName: "plus.circle"), text: "添加已有文件夹")
-                        .onTapGesture {
+                    Button {
                             let panel = NSOpenPanel()
                             panel.allowsMultipleSelection = false
                             panel.canChooseFiles = false
@@ -72,11 +71,16 @@ struct VersionSelectView: View, SubRouteContainer {
                                 settings.currentMinecraftDirectory = .init(rootURL: url, name: "自定义目录")
                                 hint("添加成功", .finish)
                             }
-                        }
-                    LeftTabItem(image: Image(systemName: "shippingbox.and.arrow.backward"), text: "一键导入整合包")
-                        .onTapGesture {
-                            selectAndImportModpack()
-                        }
+                    } label: {
+                        LeftTabItem(image: Image(systemName: "plus.circle"), text: "添加已有文件夹")
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("添加已有 Minecraft 文件夹")
+                    Button(action: selectAndImportModpack) {
+                        LeftTabItem(image: Image(systemName: "shippingbox.and.arrow.backward"), text: "一键导入整合包")
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("导入整合包")
                     Spacer()
                 }
             }
@@ -107,6 +111,12 @@ struct VersionSelectView: View, SubRouteContainer {
                         .frame(width: 16)
                         .foregroundStyle(Color("TextColor"))
                         .onTapGesture {
+                            settings.removeDirectory(url: directory.rootURL)
+                            hint("移除成功", .finish)
+                        }
+                        .accessibilityLabel("移除 Minecraft 文件夹 \(directory.name)")
+                        .accessibilityAddTraits(.isButton)
+                        .accessibilityAction {
                             settings.removeDirectory(url: directory.rootURL)
                             hint("移除成功", .finish)
                         }

@@ -36,30 +36,33 @@ fileprivate struct VersionView: View, Identifiable {
     }
     
     var body: some View {
-        MyListItem {
-            HStack {
-                Image(self.icon)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 35)
-                    .padding(.leading, 5)
-                VStack(alignment: .leading) {
-                    Text(self.name)
-                        .font(.custom("PCL English", size: 14))
-                        .foregroundStyle(Color("TextColor"))
-                        .padding(.top, 5)
-                    Text(self.description)
-                        .font(.custom("PCL English", size: 14))
-                        .foregroundStyle(Color(hex: 0x7F8790))
-                        .padding(.bottom, 5)
+        Button {
+            parent.onVersionClicked(version)
+        } label: {
+            MyListItem {
+                HStack {
+                    Image(self.icon)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 35)
+                        .padding(.leading, 5)
+                    VStack(alignment: .leading) {
+                        Text(self.name)
+                            .font(.system(size: 14))
+                            .foregroundStyle(Color("TextColor"))
+                            .padding(.top, 5)
+                        Text(self.description)
+                            .font(.system(size: 14))
+                            .foregroundStyle(Color(hex: 0x7F8790))
+                            .padding(.bottom, 5)
+                    }
+                    Spacer()
                 }
-                Spacer()
             }
         }
+        .buttonStyle(.plain)
+        .accessibilityLabel("下载 Minecraft \(name)，\(description)")
         .padding(.top, -8)
-        .onTapGesture {
-            self.parent.onVersionClicked(version)
-        }
     }
 }
 

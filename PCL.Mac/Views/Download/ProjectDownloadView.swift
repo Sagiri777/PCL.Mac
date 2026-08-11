@@ -32,19 +32,19 @@ fileprivate struct ProjectVersionListView: View {
                                     .padding(4)
                                 ForEach(version.dependencies, id: \.self) { dependency in
                                     ProjectListItem(summary: dependency.summary)
-                                        .onTapGesture {
-                                            dataManager.router.append(.projectDownload(summary: dependency.summary))
-                                        }
                                 }
                                 Text("版本列表")
                                     .font(.custom("PCL English", size: 14))
                                     .padding(4)
                             }
                             ForEach(versions) { version in
-                                ProjectVersionListItem(version: version)
-                                    .onTapGesture {
-                                        state.addToQueue(version)
-                                    }
+                                Button {
+                                    state.addToQueue(version)
+                                } label: {
+                                    ProjectVersionListItem(version: version)
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("下载 \(version.name)，\(version.versionNumber)")
                             }
                         }
                         .padding(4)

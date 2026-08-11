@@ -8,6 +8,7 @@
 import SwiftUI
 
 fileprivate struct LeftTab: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject private var dataManager: DataManager = .shared
     @ObservedObject private var accountManager: AccountManager = .shared
 
@@ -18,34 +19,38 @@ fileprivate struct LeftTab: View {
 
 
     private var accountView: some View {
-        MyListItem {
-            VStack {
-                if let account = accountManager.getAccount() {
-                    MinecraftAvatar(account: account, src: account.uuid.uuidString)
-                    Text(account.name)
-                        .font(.custom("PCL English", size: 16))
-                        .foregroundStyle(Color("TextColor"))
-                } else {
-                    Image("Missingno")
-                        .interpolation(.none)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: 58)
-                        .padding(6)
-                    Text("无账号")
-                        .font(.custom("PCL English", size: 16))
-                        .foregroundStyle(Color("TextColor"))
-                }
-                Text("点击头像进入账号管理")
-                    .font(.custom("PCL English", size: 10))
-                    .foregroundStyle(Color(hex: 0x8C8C8C))
-                    .padding(.top, 2)
-            }
-            .padding(4)
-        }
-        .onTapGesture {
+        Button {
             dataManager.router.append(.accountManagement)
+        } label: {
+            MyListItem {
+                VStack {
+                    if let account = accountManager.getAccount() {
+                        MinecraftAvatar(account: account, src: account.uuid.uuidString)
+                        Text(account.name)
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundStyle(Color("TextColor"))
+                    } else {
+                        Image("Missingno")
+                            .interpolation(.none)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 58)
+                            .padding(6)
+                        Text("无账号")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundStyle(Color("TextColor"))
+                    }
+                    Text("账号管理")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color(hex: 0x8C8C8C))
+                        .padding(.top, 2)
+                }
+                .padding(4)
+            }
         }
+        .buttonStyle(.plain)
+        .accessibilityLabel(accountManager.getAccount().map { "账号 \($0.name)" } ?? "未选择账号")
+        .accessibilityHint("打开账号管理")
     }
     
     var body: some View {
@@ -66,7 +71,7 @@ fileprivate struct LeftTab: View {
                 .padding(.bottom, -27)
                 .disabled(isLaunching)
                 .opacity(isLaunching ? 0.7 : 1)
-                .animation(.easeInOut(duration: 0.15), value: isLaunching)
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: isLaunching)
             } else {
                 MyButton(text: "下载游戏", descriptionText: "未找到可用的游戏版本") {
                     dataManager.router.setRoot(.download)
@@ -292,12 +297,15 @@ struct LaunchView: View {
                         HStack(spacing: 4) {
                             Text("如果遇到问题请")
                                 .font(.custom("PCL English", size: 14))
-                            Text("点击此处反馈")
-                                .font(.custom("PCL English", size: 14))
-                                .onTapGesture {
+                            Button {
                                     NSWorkspace.shared.open(SharedConstants.shared.projectURL)
-                                }
-                                .foregroundStyle(AppSettings.shared.theme.getTextStyle())
+                            } label: {
+                                Text("点击此处反馈")
+                                    .font(.system(size: 14))
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(AppSettings.shared.theme.getTextStyle())
+                            .accessibilityLabel("打开项目反馈页面")
                         }
                     }
                     .foregroundStyle(Color("TextColor"))

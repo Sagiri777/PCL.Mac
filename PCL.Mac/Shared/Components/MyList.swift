@@ -8,6 +8,7 @@
 import SwiftUI
 
 struct MyList<Content: View>: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject private var router = DataManager.shared.router
     
     let content: (AppRoute, Bool) -> Content
@@ -40,10 +41,10 @@ struct MyList<Content: View>: View {
                 ForEach(cases.indices, id: \.self) { index in
                     let item = cases[index]
                     RouteView(content: content, item: item, height: height)
-                        .offset(x: appeared.contains(item) ? 0 : -DataManager.shared.leftTabWidth / 2)
-                        .opacity(appeared.contains(item) ? 1 : 0)
+                        .offset(x: reduceMotion || appeared.contains(item) ? 0 : -DataManager.shared.leftTabWidth / 2)
+                        .opacity(reduceMotion || appeared.contains(item) ? 1 : 0)
                         .animation(
-                            .spring(response: 0.4, dampingFraction: 0.65)
+                            reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.65)
                                 .delay(Double(index + animationIndex) * 0.038),
                             value: appeared.contains(item)
                         )
@@ -67,6 +68,7 @@ struct MyList<Content: View>: View {
 }
 
 fileprivate struct RouteView<Content: View>: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject private var router = DataManager.shared.router
     
     @State private var isHovered: Bool = false
@@ -99,7 +101,7 @@ fileprivate struct RouteView<Content: View>: View {
                 content(item, router.getLast().isSame(item))
                     .frame(height: height)
                     .padding(.leading, 5)
-                    .animation(.easeInOut(duration: 0.2), value: router.getLast())
+                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: router.getLast())
                 Spacer()
             }
             .frame(maxWidth: .infinity, minHeight: height)
@@ -107,7 +109,7 @@ fileprivate struct RouteView<Content: View>: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .animation(.easeInOut(duration: 0.2), value: isHovered)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: isHovered)
         .onHover { isHovered = $0 }
     }
 
@@ -116,7 +118,7 @@ fileprivate struct RouteView<Content: View>: View {
         router.removeLast()
         router.append(item)
         indicatorHeight = 10
-        withAnimation(.spring(duration: 0.2)) {
+        withAnimation(reduceMotion ? nil : .spring(duration: 0.2)) {
             indicatorHeight = height - 8
         }
     }

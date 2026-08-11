@@ -8,6 +8,7 @@
 import SwiftUI
 
 struct DownloadPage: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let version: MinecraftVersion
     let back: () -> Void
     
@@ -32,15 +33,17 @@ struct DownloadPage: View {
             ScrollView {
                 TitlelessMyCard {
                     HStack(alignment: .center) {
-                        Image("Back")
-                            .resizable()
-                            .scaledToFit()
-                            .frame(width: 15)
-                            .foregroundStyle(Color(hex: 0x96989A))
-                            .padding(EdgeInsets(top: 0, leading: 10, bottom: 0, trailing: 10))
-                            .onTapGesture {
-                                back()
-                            }
+                        Button(action: back) {
+                            Image("Back")
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: 15)
+                                .padding(EdgeInsets(top: 0, leading: 10, bottom: 0, trailing: 10))
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(Color(hex: 0x96989A))
+                        .help("返回版本列表")
+                        .accessibilityLabel("返回版本列表")
                         Image(loader != nil ? "\(loader!.loader.rawValue.capitalized)Icon" : version.getIconName())
                             .resizable()
                             .scaledToFit()
@@ -57,7 +60,7 @@ struct DownloadPage: View {
                                     .frame(maxWidth: .infinity, alignment: .leading)
                             }
                         }
-                        .animation(.easeInOut(duration: 0.2), value: errorMessage)
+                        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: errorMessage)
                     }
                 }
                 .noAnimation()
@@ -193,6 +196,7 @@ private struct LoaderVersion: Identifiable, Equatable {
 }
 
 fileprivate struct LoaderCard: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var showFoldController: Bool = false
     @State private var showCancelButton: Bool = false
     @State private var versions: [LoaderVersion]? = nil
@@ -217,16 +221,19 @@ fileprivate struct LoaderCard: View {
                 MyCard(title: loader.getName(), unfoldBinding: $isUnfolded) {
                     LazyVStack(spacing: 0) {
                         ForEach(versions) { version in
-                            ListItem(iconName: "\(loader.rawValue.capitalized)Icon", title: version.displayName, description: version.stable ? "稳定版" : "测试版", isSelected: selectedLoader == version)
-                                .animation(.easeInOut(duration: 0.2), value: selectedLoader?.id)
-                                .onTapGesture {
+                            Button {
                                     selectedLoader = version
                                     isUnfolded = false
                                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
                                         showFoldController = false
                                         showCancelButton = true
                                     }
-                                }
+                            } label: {
+                                ListItem(iconName: "\(loader.rawValue.capitalized)Icon", title: version.displayName, description: version.stable ? "稳定版" : "测试版", isSelected: selectedLoader == version)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("选择 \(loader.getName()) \(version.displayName)")
+                            .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: selectedLoader?.id)
                         }
                     }
                 }
@@ -237,18 +244,21 @@ fileprivate struct LoaderCard: View {
                         MaskedTextRectangle(text: loader.getName())
                         Spacer()
                         if showCancelButton {
-                            Image(systemName: "xmark")
-                                .resizable()
-                                .scaledToFit()
-                                .bold()
-                                .frame(width: 16)
-                                .foregroundStyle(Color("TextColor"))
-                                .contentShape(Rectangle())
-                                .onTapGesture {
+                            Button {
                                     showCancelButton = false
                                     showFoldController = true
                                     selectedLoader = nil
-                                }
+                            } label: {
+                                Image(systemName: "xmark")
+                                    .resizable()
+                                    .scaledToFit()
+                                    .bold()
+                                    .frame(width: 16)
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(Color("TextColor"))
+                            .help("移除加载器")
+                            .accessibilityLabel("移除已选择的 \(loader.getName()) 加载器")
                         }
                     }
                     .frame(height: 9)

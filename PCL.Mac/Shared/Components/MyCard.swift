@@ -8,6 +8,7 @@
 import SwiftUI
 
 struct BaseCardContainer<Content: View>: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     // BaseCardContainer 自身不再订阅 AppSettings；玻璃参数通过
     // 独立子 view CardBackgroundView 订阅 GlassSettings，避免拖动玻璃滑块
     // 时整棵界面（包括卡片正文）都重渲染。
@@ -31,13 +32,13 @@ struct BaseCardContainer<Content: View>: View {
             .background(CardBackgroundView(isHovered: isHovered))
             .padding(.top, -23)
             .opacity(isAppeared ? 1 : 0)
-            .offset(y: isAppeared ? 25 : 0)
-            .animation(.easeInOut(duration: 0.2), value: isHovered)
+            .offset(y: isAppeared || reduceMotion ? 25 : 0)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: isHovered)
             .onHover { hover in
                 isHovered = hover
             }
             .onAppear {
-                if hasAnimation {
+                if hasAnimation && !reduceMotion {
                     DispatchQueue.main.asyncAfter(deadline: .now() + Double(index) * 0.04) {
                         withAnimation(.spring(response: 0.4, dampingFraction: 0.5)) {
                             isAppeared = true
@@ -96,6 +97,7 @@ fileprivate struct ContentHeightKey: PreferenceKey {
 }
 
 struct MyCard<Content: View>: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject private var dataManager: DataManager = .shared
 
     let title: String
@@ -122,7 +124,11 @@ struct MyCard<Content: View>: View {
     var body: some View {
         BaseCardContainer(index: index, hasAnimation: hasAnimation) { isHovered in
             VStack(spacing: 0) {
-                ZStack {
+                Button {
+                    if Date().timeIntervalSince(lastClick) < 0.2 { return }
+                    lastClick = Date()
+                    toggle()
+                } label: {
                     HStack {
                         MaskedTextRectangle(text: title)
                         Spacer()
@@ -130,20 +136,16 @@ struct MyCard<Content: View>: View {
                             .resizable()
                             .aspectRatio(contentMode: .fit)
                             .frame(width: 16, height: 16)
-                            .rotationEffect(.degrees(isUnfolded ? 180 : 0), anchor: .center)
+                            .rotationEffect(.degrees(isUnfolded && !reduceMotion ? 180 : 0), anchor: .center)
                             .foregroundStyle(.primary)
                     }
-                    Color.clear
-                        .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .contentShape(Rectangle())
                 .frame(height: 9)
-                .onTapGesture {
-                    if Date().timeIntervalSince(lastClick) < 0.2 {
-                        return
-                    }
-                    lastClick = Date()
-                    toggle()
-                }
+                .accessibilityLabel(title)
+                .accessibilityValue(isUnfolded ? "已展开" : "已折叠")
+                .accessibilityHint(isUnfolded ? "折叠此区域" : "展开此区域")
 
                 ZStack(alignment: .top) {
                     content
@@ -159,8 +161,8 @@ struct MyCard<Content: View>: View {
                 .frame(height: contentHeight, alignment: .top)
                 .clipped()
                 .padding(.top, showContent ? 10 : 0)
-                .animation(.easeInOut(duration: 0.3), value: isUnfolded)
-                .animation(.easeInOut(duration: 0.3), value: contentHeight)
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: isUnfolded)
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: contentHeight)
             }
             .onPreferenceChange(ContentHeightKey.self) { h in
                 if h > 0 { internalContentHeight = h }
@@ -179,7 +181,7 @@ struct MyCard<Content: View>: View {
     private func toggle() {
         if !showContent {
             showContent = true
-            withAnimation(.linear(duration: 0.2)) {
+            withAnimation(reduceMotion ? nil : .linear(duration: 0.2)) {
                 isUnfolded = true
                 onToggle?(true)
                 contentHeight = internalContentHeight
@@ -187,13 +189,18 @@ struct MyCard<Content: View>: View {
             updateState(true)
         } else {
             contentHeight = min(2000, contentHeight)
-            withAnimation(.spring(response: 0.4, dampingFraction: 0.85, blendDuration: 0)) {
+            withAnimation(reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.85, blendDuration: 0)) {
                 isUnfolded = false
                 contentHeight = 0
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            if reduceMotion {
                 showContent = false
                 onToggle?(false)
+            } else {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                    showContent = false
+                    onToggle?(false)
+                }
             }
             updateState(false)
         }

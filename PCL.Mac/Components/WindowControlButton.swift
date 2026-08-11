@@ -14,8 +14,8 @@ struct WindowControlButton: View {
         .aspectRatio(contentMode: .fit)
         .frame(width: 13)
         .foregroundStyle(.white)
-        .bold()
-    ) {
+        .bold(),
+    accessibilityLabel: "关闭窗口") {
         guard let window = WindowControlButton.activeWindow else { return }
         window.close()
     }
@@ -26,8 +26,8 @@ struct WindowControlButton: View {
         .aspectRatio(contentMode: .fit)
         .frame(width: 13)
         .foregroundStyle(.white)
-        .bold()
-    ) {
+        .bold(),
+    accessibilityLabel: "最小化窗口") {
         guard let window = WindowControlButton.activeWindow else { return }
         window.miniaturize(nil)
     }
@@ -38,21 +38,27 @@ struct WindowControlButton: View {
             .aspectRatio(contentMode: .fit)
             .frame(height: 18)
             .foregroundStyle(.white)
-            .padding(.top, 3)
-    ) {
+            .padding(.top, 3),
+        accessibilityLabel: "返回") {
         DataManager.shared.router.goBack()
     }
     
     let action: () -> Void
     private let content: (Bool) -> any View
+    private let accessibilityLabel: String
     @State private var isHovered = false
     
-    init(@ViewBuilder _ content: @escaping (Bool) -> some View, action: @escaping () -> Void) {
+    init(
+        accessibilityLabel: String = "窗口操作",
+        @ViewBuilder _ content: @escaping (Bool) -> some View,
+        action: @escaping () -> Void
+    ) {
         self.content = content
         self.action = action
+        self.accessibilityLabel = accessibilityLabel
     }
     
-    init(_ view: some View, action: @escaping () -> Void) {
+    init(_ view: some View, accessibilityLabel: String = "窗口操作", action: @escaping () -> Void) {
         self.content = { isHovered in
             view
                 .background(
@@ -64,14 +70,18 @@ struct WindowControlButton: View {
                 .frame(width: 30, height: 30)
         }
         self.action = action
+        self.accessibilityLabel = accessibilityLabel
     }
 
     var body: some View {
-        AnyView(content(isHovered))
-            .onHover { hover in
-                isHovered = hover
-            }
-            .onTapGesture(perform: action)
+        Button(action: action) {
+            AnyView(content(isHovered))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(accessibilityLabel)
+        .onHover { hover in
+            isHovered = hover
+        }
     }
 
     private static var activeWindow: NSWindow? {
