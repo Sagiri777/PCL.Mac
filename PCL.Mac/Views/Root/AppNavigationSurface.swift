@@ -385,6 +385,7 @@ private struct NativeMacSidebar: View {
     private let routes: [(AppRoute, String, String)] = [
         (.launch, "play.fill", "启动"),
         (.download, "square.and.arrow.down", "下载"),
+        (.multiplayer, "network", "联机"),
         (.settings, "gearshape", "设置"),
         (.others, "ellipsis.circle", "更多")
     ]

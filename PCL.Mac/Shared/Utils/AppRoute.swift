@@ -32,6 +32,9 @@ public enum AppRoute: Hashable {
     case instanceOverview
     case instanceSettings
     case instanceMods
+    case instanceDiagnostics
+    case instanceSnapshots
+    case instanceModUpdates
     case javaDownload
     
     case about
@@ -78,7 +81,8 @@ public enum AppRoute: Hashable {
         case .projectDownload(let summary): "资源下载 - \(summary.name)"
         case .accountManagement, .accountList, .newAccount: "账号管理"
         case .announcementHistory: "历史公告"
-        case .versionSettings, .instanceOverview, .instanceSettings, .instanceMods: "版本设置 - \(AppSettings.shared.defaultInstance ?? "")"
+        case .versionSettings, .instanceOverview, .instanceSettings, .instanceMods,
+                .instanceDiagnostics, .instanceSnapshots, .instanceModUpdates: "版本设置 - \(AppSettings.shared.defaultInstance ?? "")"
         case .javaDownload: "Java 下载"
         default: SharedConstants.shared.editionName
         }
@@ -127,7 +131,8 @@ public class AppRouter: ObservableObject {
             ProjectDownloadView(id: summary.modId)
         case .announcementHistory:
             AnnouncementHistoryView()
-        case .versionSettings, .instanceOverview, .instanceSettings, .instanceMods:
+        case .versionSettings, .instanceOverview, .instanceSettings, .instanceMods,
+                .instanceDiagnostics, .instanceSnapshots, .instanceModUpdates:
             VersionSettingsView()
         case .javaDownload:
             JavaInstallView()
@@ -151,7 +156,8 @@ public class AppRouter: ObservableObject {
         case .versionSelect, .versionList: "versionSelect"
         case .projectDownload(let summary): "projectDownload-\(summary.modId)"
         case .announcementHistory: "announcementHistory"
-        case .versionSettings, .instanceOverview, .instanceSettings, .instanceMods: "versionSettings"
+        case .versionSettings, .instanceOverview, .instanceSettings, .instanceMods,
+                .instanceDiagnostics, .instanceSnapshots, .instanceModUpdates: "versionSettings"
         case .javaDownload: "javaDownload"
         }
     }

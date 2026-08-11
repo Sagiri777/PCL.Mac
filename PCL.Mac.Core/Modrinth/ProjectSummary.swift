@@ -50,6 +50,7 @@ public class ProjectDependency: Hashable, Identifiable, Equatable {
 }
 
 public class ProjectVersion: Hashable, Identifiable, Equatable {
+    public let versionId: String
     public let projectType: ProjectType
     public let projectId: String
     public let name: String
@@ -61,8 +62,10 @@ public class ProjectVersion: Hashable, Identifiable, Equatable {
     public let loaders: [ClientBrand]
     public let dependencies: [ProjectDependency]
     public let downloadURL: URL
+    public let downloadSHA1: String?
     
-    public init(projectType: ProjectType, projectId: String, name: String, versionNumber: String, type: String, downloads: Int, updateDate: Date, gameVersions: [MinecraftVersion], loaders: [ClientBrand], dependencies: [ProjectDependency], downloadURL: URL) {
+    public init(versionId: String = "", projectType: ProjectType, projectId: String, name: String, versionNumber: String, type: String, downloads: Int, updateDate: Date, gameVersions: [MinecraftVersion], loaders: [ClientBrand], dependencies: [ProjectDependency], downloadURL: URL, downloadSHA1: String? = nil) {
+        self.versionId = versionId
         self.projectType = projectType
         self.projectId = projectId
         self.name = name
@@ -74,6 +77,7 @@ public class ProjectVersion: Hashable, Identifiable, Equatable {
         self.loaders = loaders
         self.dependencies = dependencies
         self.downloadURL = downloadURL
+        self.downloadSHA1 = downloadSHA1
     }
     
     public let id: UUID = .init()

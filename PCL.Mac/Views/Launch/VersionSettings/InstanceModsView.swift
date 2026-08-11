@@ -117,6 +117,13 @@ struct InstanceModsView: View {
                                 dataManager.router.append(.projectSearch(type: .mod))
                             }
                             .frame(width: 120, height: 35)
+                            MyButton(text: "检查更新") {
+                                var path = dataManager.router.path
+                                if !path.isEmpty { path.removeLast() }
+                                path.append(.instanceModUpdates)
+                                dataManager.router.path = path
+                            }
+                            .frame(width: 120, height: 35)
                             Spacer()
                         }
                         .padding(2)
@@ -825,26 +832,30 @@ struct InstanceModsView: View {
                     if isHovered {
                         HStack {
                             if let summary = mod.summary {
-                                Image("InfoIcon")
+                                Button {
+                                    dataManager.router.append(.projectDownload(summary: summary))
+                                } label: {
+                                    Image("InfoIcon")
+                                        .resizable()
+                                        .scaledToFit()
+                                        .frame(width: 16)
+                                }
+                                .buttonStyle(.plain)
+                                .foregroundStyle(AppSettings.shared.theme.getTextStyle())
+                                .help("查看项目信息")
+                                .accessibilityLabel("查看 \(mod.summary?.name ?? mod.name) 项目信息")
+                            }
+
+                            Button(action: toggleDisable) {
+                                Image(isDisabled ? "CheckIcon" : "StopIcon")
                                     .resizable()
                                     .scaledToFit()
                                     .frame(width: 16)
-                                    .foregroundStyle(AppSettings.shared.theme.getTextStyle())
-                                    .contentShape(Rectangle())
-                                    .onTapGesture {
-                                        dataManager.router.append(.projectDownload(summary: summary))
-                                    }
                             }
-                            
-                            Image(isDisabled ? "CheckIcon" : "StopIcon")
-                                .resizable()
-                                .scaledToFit()
-                                .frame(width: 16)
-                                .foregroundStyle(AppSettings.shared.theme.getTextStyle())
-                                .contentShape(Rectangle())
-                                .onTapGesture {
-                                    toggleDisable()
-                                }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(AppSettings.shared.theme.getTextStyle())
+                            .help(isDisabled ? "启用 Mod" : "禁用 Mod")
+                            .accessibilityLabel("\(isDisabled ? "启用" : "禁用") \(mod.summary?.name ?? mod.name)")
                         }
                         .padding(.trailing, 4)
                     }

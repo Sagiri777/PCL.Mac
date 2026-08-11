@@ -36,8 +36,17 @@ public class MinecraftLauncher {
         arguments.append(manifest.mainClass)
         arguments.append(contentsOf: buildGameArguments(options))
         process.arguments = arguments
-        let command = javaPath.path + " " + arguments.joined(separator: " ")
-            .replacingOccurrences(of: #"--accessToken\s+\S+"#, with: "--accessToken 🎉", options: .regularExpression)
+        let command = (javaPath.path + " " + arguments.joined(separator: " "))
+            .replacingOccurrences(
+                of: #"(?i)(--(?:auth[_-]?)?access[_-]?token(?:=|\s+))\S+"#,
+                with: "$1<redacted>",
+                options: .regularExpression
+            )
+            .replacingOccurrences(
+                of: #"(?i)(--client[_-]?token(?:=|\s+))\S+"#,
+                with: "$1<redacted>",
+                options: .regularExpression
+            )
         debug(command)
         MinecraftCrashHandler.lastLaunchCommand = command
         process.currentDirectoryURL = instance.runningDirectory
@@ -158,7 +167,7 @@ public class MinecraftLauncher {
         return urls.map { $0.path }.joined(separator: ":")
     }
     
-    private func buildGameArguments(_ options: LaunchOptions) -> [String] {
+    func buildGameArguments(_ options: LaunchOptions) -> [String] {
         guard let manifest = instance.manifest else { return [] }
         let values: [String: String] = [
             "auth_player_name": options.playerName,
@@ -178,10 +187,14 @@ public class MinecraftLauncher {
             args.append("--demo")
         }
         
-        return Util.replaceTemplateStrings(
+        var arguments = Util.replaceTemplateStrings(
             manifest.getArguments().getAllowedGameArguments(targetArchitecture: targetArchitecture),
             with: values
         ).union(args)
+        if let serverAddress = options.serverAddress, !serverAddress.isEmpty {
+            arguments.append(contentsOf: ["--server", serverAddress, "--port", String(options.serverPort)])
+        }
+        return arguments
     }
 
     private var targetArchitecture: Architecture {

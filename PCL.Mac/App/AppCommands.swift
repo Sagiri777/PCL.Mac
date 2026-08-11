@@ -29,8 +29,9 @@ struct AppCommands: Commands {
             Divider()
             navigationButton("启动", route: .launch, key: "1")
             navigationButton("下载", route: .download, key: "2")
-            navigationButton("设置", route: .settings, key: "3")
-            navigationButton("更多", route: .others, key: "4")
+            navigationButton("联机", route: .multiplayer, key: "3")
+            navigationButton("设置", route: .settings, key: "4")
+            navigationButton("更多", route: .others, key: "5")
         }
     }
 

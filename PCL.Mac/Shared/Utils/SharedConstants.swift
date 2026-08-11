@@ -20,11 +20,11 @@ public struct SharedConstants {
     public let dateFormatter = DateFormatter()
     
     public let isDevelopment: Bool
-    public let version = "2.0.0"
+    public let version: String
     public let branch: String
     public let editionName = "PCL.Mac Liquid Glass Edition"
     public let editionSubtitle = "macOS 26 原生液态玻璃增强版"
-    public let projectURL = URL(string: "https://github.com/Meloong-Git/PCL")!
+    public let projectURL = URL(string: "https://github.com/Sagiri777/PCL.Mac")!
     
     private init() {
         self.applicationContentsURL = Bundle.main.bundleURL.appending(path: "Contents")
@@ -32,6 +32,7 @@ public struct SharedConstants {
         self.logURL = applicationSupportURL.appending(path: "Logs").appending(path: "app.log")
         self.temperatureURL = applicationSupportURL.appending(path: "Temp")
         self.authlibInjectorURL = applicationSupportURL.appending(path: "authlib-injector.jar")
+        self.version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "2.2.0"
         
         self.dateFormatter.dateFormat = "yyyy/MM/dd HH:mm"
         self.dateFormatter.timeZone = TimeZone(identifier: "Asia/Shanghai")

@@ -82,7 +82,7 @@ struct TitleBarView: View {
                 Spacer()
                 MenuItemButton(route: .launch)
                 MenuItemButton(route: .download)
-//                MenuItemButton(route: .multiplayer)
+                MenuItemButton(route: .multiplayer)
                 MenuItemButton(route: .settings)
                 MenuItemButton(route: .others)
             }

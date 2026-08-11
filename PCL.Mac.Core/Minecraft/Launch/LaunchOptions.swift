@@ -16,6 +16,8 @@ public class LaunchOptions {
     public var accessToken: String = ""
     public var account: AnyAccount?
     public var yggdrasilArguments: [String] = []
+    public var serverAddress: String?
+    public var serverPort: UInt16 = 25565
     
     public init() {}
 }

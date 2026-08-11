@@ -33,6 +33,12 @@ struct VersionSettingsView: View, SubRouteContainer {
                 InstanceSettingsView(instance: instance)
             case .instanceMods:
                 InstanceModsView(instance: instance)
+            case .instanceDiagnostics:
+                InstanceDiagnosticsView(instance: instance)
+            case .instanceSnapshots:
+                InstanceSnapshotsView(instance: instance)
+            case .instanceModUpdates:
+                ModUpdateCenterView(instance: instance)
             default:
                 Spacer()
             }
@@ -46,7 +52,10 @@ struct VersionSettingsView: View, SubRouteContainer {
                             [
                                 .instanceOverview,
                                 .instanceSettings,
-                                .instanceMods
+                                .instanceMods,
+                                .instanceDiagnostics,
+                                .instanceSnapshots,
+                                .instanceModUpdates
                             ]
                         )) { route, isSelected in
                             createListItemView(route)
@@ -73,6 +82,15 @@ struct VersionSettingsView: View, SubRouteContainer {
         case .instanceMods:
             imageName = "ModDownloadIcon"
             text = "Mod"
+        case .instanceDiagnostics:
+            imageName = "SettingsIcon"
+            text = "诊断"
+        case .instanceSnapshots:
+            imageName = "GameDownloadIcon"
+            text = "快照"
+        case .instanceModUpdates:
+            imageName = "ModDownloadIcon"
+            text = "更新"
         default:
             return AnyView(EmptyView())
         }

@@ -46,7 +46,10 @@ public class ModrinthProjectSearcher {
     func parseDate(from value: String) -> Date? {
         dateFormatterLock.lock()
         defer { dateFormatterLock.unlock() }
-        return dateFormatter.date(from: value)
+        if let date = dateFormatter.date(from: value) { return date }
+        let fallback = ISO8601DateFormatter()
+        fallback.formatOptions = [.withInternetDateTime]
+        return fallback.date(from: value)
     }
     
     public func get(_ id: String) async throws -> ProjectSummary {
@@ -108,13 +111,15 @@ public class ModrinthProjectSearcher {
     }
 
     private func makeVersion(json: JSON, summary: ProjectSummary) async throws -> ProjectVersion {
+        let files = json["files"].arrayValue
         guard let updateDate = parseDate(from: json["date_published"].stringValue),
-              let file = json["files"].arrayValue.first,
+              let file = files.first(where: { $0["primary"].boolValue }) ?? files.first,
               let downloadURL = file["url"].url else {
             throw MyLocalizedError(reason: "Modrinth 版本响应缺少有效日期或下载地址")
         }
 
         return .init(
+            versionId: json["id"].stringValue,
             projectType: summary.type,
             projectId: json["project_id"].stringValue,
             name: json["name"].stringValue,
@@ -125,8 +130,68 @@ public class ModrinthProjectSearcher {
             gameVersions: json["game_versions"].arrayValue.map { MinecraftVersion(displayName: $0.stringValue) },
             loaders: json["loaders"].arrayValue.map { ClientBrand(rawValue: $0.stringValue) ?? .vanilla },
             dependencies: await getDependencies(json),
-            downloadURL: downloadURL
+            downloadURL: downloadURL,
+            downloadSHA1: file["hashes"]["sha1"].string
         )
+    }
+
+    public func getVersions(
+        id: String,
+        gameVersion: MinecraftVersion,
+        loader: ClientBrand
+    ) async throws -> [ProjectVersion] {
+        let loaders = try jsonArrayString([loader.rawValue])
+        let gameVersions = try jsonArrayString([gameVersion.displayName])
+        let json = try await Requests.get(
+            "https://api.modrinth.com/v2/project/\(id)/version",
+            body: ["loaders": loaders, "game_versions": gameVersions],
+            encodeMethod: .urlEncoded,
+            category: .gameDownload
+        ).getJSONOrThrow()
+        let summary = try await get(id)
+        var versions: [ProjectVersion] = []
+        for versionJSON in json.arrayValue {
+            versions.append(try await makeVersion(json: versionJSON, summary: summary))
+        }
+        return versions.sorted { $0.updateDate > $1.updateDate }
+    }
+
+    public struct InstalledVersionMatch: Sendable {
+        public let projectID: String
+        public let versionID: String
+        public let versionNumber: String
+        public let versionType: String
+    }
+
+    /// 使用 Modrinth 的 SHA-1 文件接口识别本地 JAR，避免按显示名称误配项目。
+    public func matchVersionFiles(sha1Hashes: [String]) async throws -> [String: InstalledVersionMatch] {
+        guard !sha1Hashes.isEmpty else { return [:] }
+        let json = try await Requests.post(
+            URL(string: "https://api.modrinth.com/v2/version_files")!,
+            body: ["hashes": sha1Hashes, "algorithm": "sha1"],
+            encodeMethod: .json,
+            category: .gameDownload
+        ).getJSONOrThrow()
+        var result: [String: InstalledVersionMatch] = [:]
+        for (hash, value) in json.dictionaryValue {
+            guard let projectID = value["project_id"].string,
+                  let versionID = value["id"].string else { continue }
+            result[hash] = .init(
+                projectID: projectID,
+                versionID: versionID,
+                versionNumber: value["version_number"].stringValue,
+                versionType: value["version_type"].stringValue
+            )
+        }
+        return result
+    }
+
+    private func jsonArrayString(_ values: [String]) throws -> String {
+        let data = try JSONSerialization.data(withJSONObject: values)
+        guard let string = String(data: data, encoding: .utf8) else {
+            throw MyLocalizedError(reason: "无法编码 Modrinth 请求条件")
+        }
+        return string
     }
     
     public func getVersionMap(id: String) async throws -> ProjectVersionMap {
