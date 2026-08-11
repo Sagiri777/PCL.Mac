@@ -14,7 +14,7 @@ import UserNotifications
 import SwiftyJSON
 
 struct PCL_MacTests {
-    @Test func testDownload() async {
+    @Test(.enabled(if: pclIntegrationTestsEnabled)) func testDownload() async {
         await withCheckedContinuation { continuation in
             let task = MinecraftInstaller.createTask(.init(displayName: "1.21.8"), "1.21.8", .default, continuation.resume)
             task.start()

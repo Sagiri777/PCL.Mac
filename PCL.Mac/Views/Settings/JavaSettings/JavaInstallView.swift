@@ -73,6 +73,7 @@ struct JavaInstallView: View {
 }
 
 struct JavaPackageView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHovered: Bool = false
     
     private let package: JavaPackage
@@ -82,37 +83,35 @@ struct JavaPackageView: View {
     }
     
     var body: some View {
-        MyListItem {
-            HStack(alignment: .center) {
-                VStack(alignment: .leading) {
-                    Text("\(package.type.rawValue.uppercased()) \(package.version.first ?? 0)")
-                        .foregroundStyle(isHovered ? AppSettings.shared.theme.getTextStyle() : .init(Color("TextColor")))
-                    HStack {
+        Button {
+            let task = JavaInstallTask(package: package)
+            DataManager.shared.inprogressInstallTasks = .single(task)
+            task.start()
+            hint("开始安装 Java \(package.versionString)")
+        } label: {
+            MyListItem {
+                HStack(alignment: .center) {
+                    VStack(alignment: .leading) {
+                        Text("\(package.type.rawValue.uppercased()) \(package.version.first ?? 0)")
+                            .foregroundStyle(isHovered ? AppSettings.shared.theme.getTextStyle() : .init(Color("TextColor")))
                         Text(verbatim: "\(package.versionString)，\(package.arch) 架构")
+                            .foregroundStyle(Color(hex: 0x8C8C8C))
                     }
-                    .foregroundStyle(Color(hex: 0x8C8C8C))
-                }
-                Spacer()
-                if isHovered {
+                    Spacer()
                     Image("DownloadIcon")
                         .resizable()
                         .scaledToFit()
                         .frame(width: 16)
                         .padding(.trailing, 4)
-                        .foregroundStyle(AppSettings.shared.theme.getTextStyle())
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            let task = JavaInstallTask(package: package)
-                            DataManager.shared.inprogressInstallTasks = .single(task)
-                            task.start()
-                            hint("开始安装 Java \(package.versionString)")
-                        }
+                        .foregroundStyle(isHovered ? AppSettings.shared.theme.getTextStyle() : AnyShapeStyle(Color.secondary))
                 }
+                .font(.system(size: 14))
+                .padding(4)
             }
-            .font(.custom("PCL English", size: 14))
-            .padding(4)
         }
-        .animation(.easeInOut(duration: 0.2), value: isHovered)
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text(verbatim: "安装 \(package.type.rawValue.uppercased()) \(package.versionString)，\(String(describing: package.arch)) 架构"))
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: isHovered)
         .onHover { isHovered in
             self.isHovered = isHovered
         }

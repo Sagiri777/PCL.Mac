@@ -42,13 +42,20 @@ jobs:
     
       - name: Replace secrets
         run: |
-            sed -i '' "s/{{ARTIFACT_PAT}}/$ARTIFACT_PAT/g" PCL.Mac/Secrets.swift
             sed -i '' "s/{{CLIENT_ID}}/$CLIENT_ID/g" PCL.Mac/Secrets.swift
             sed -i '' "s/{{THEME_KEY}}/$THEME_KEY/g" PCL.Mac/Secrets.swift
         env:
-          ARTIFACT_PAT: ${{ secrets.ARTIFACT_PAT }}
           CLIENT_ID: ${{ secrets.CLIENT_ID }}
           THEME_KEY: ${{ secrets.THEME_KEY }}
+
+      - name: Run deterministic unit tests
+        if: matrix.architecture == 'arm64'
+        env:
+          PCL_RUN_INTEGRATION_TESTS: "0"
+        run: |
+          xcodebuild test -project PCL.Mac.xcodeproj -scheme PCL-Mac \
+            -configuration Debug -destination 'platform=macOS,arch=arm64' \
+            -xcconfig Secrets.xcconfig CODE_SIGNING_ALLOWED=NO
 
       - name: Build ${{ matrix.architecture }} Binary (xcodebuild)
         run: |

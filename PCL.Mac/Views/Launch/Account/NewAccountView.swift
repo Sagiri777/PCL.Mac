@@ -19,6 +19,7 @@ class NewAccountViewState: ObservableObject {
 }
 
 struct NewAccountView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject private var state: NewAccountViewState = StateManager.shared.newAccount
     
     @State private var isAppeared: Bool = false
@@ -56,7 +57,7 @@ struct NewAccountView: View {
         .onChange(of: state.type) {
             isAppeared = true
         }
-        .animation(.spring(response: 0.3, dampingFraction: 0.85), value: state.type)
+        .animation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.85), value: state.type)
     }
 }
 
@@ -64,42 +65,54 @@ fileprivate struct AuthMethodComponent: View {
     let type: NewAccountViewState.PageType
     
     var body: some View {
-        MyListItem {
-            HStack {
-                let iconName = switch type {
-                case .offline: "OfflineLoginIcon"
-                case .microsoft: "MicrosoftLoginIcon"
-                case .yggdrasil: "ServerIcon"
-                }
-                Image(iconName)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 25)
-                VStack(alignment: .leading) {
-                    let title = switch type {
-                    case .offline: "离线登录"
-                    case .microsoft: "正版验证"
-                    case .yggdrasil: "外置登录"
-                    }
-                    let desc = switch type {
-                    case .offline: "可自定义玩家名，可能无法加入部分服务器"
-                    case .microsoft: "需要购买 Minecraft"
-                    case .yggdrasil: "添加外置登录账号（如 LittleSkin）"
-                    }
-                    
-                    Text(title)
-                        .foregroundStyle(Color("TextColor"))
-                    Text(desc)
-                        .foregroundStyle(Color(hex: 0x8C8C8C))
-                }
-                .font(.custom("PCL English", size: 14))
-                Spacer()
-            }
-            .frame(height: 32)
-            .padding(5)
-        }
-        .onTapGesture {
+        Button {
             StateManager.shared.newAccount.type = type
+        } label: {
+            MyListItem {
+                HStack {
+                    Image(iconName)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 25)
+                    VStack(alignment: .leading) {
+                        Text(title)
+                            .foregroundStyle(Color("TextColor"))
+                        Text(description)
+                            .foregroundStyle(Color(hex: 0x8C8C8C))
+                    }
+                    .font(.system(size: 14))
+                    Spacer()
+                }
+                .frame(height: 32)
+                .padding(5)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityHint(description)
+    }
+
+    private var iconName: String {
+        switch type {
+        case .offline: "OfflineLoginIcon"
+        case .microsoft: "MicrosoftLoginIcon"
+        case .yggdrasil: "ServerIcon"
+        }
+    }
+
+    private var title: String {
+        switch type {
+        case .offline: "离线登录"
+        case .microsoft: "正版验证"
+        case .yggdrasil: "外置登录"
+        }
+    }
+
+    private var description: String {
+        switch type {
+        case .offline: "可自定义玩家名，可能无法加入部分服务器"
+        case .microsoft: "需要购买 Minecraft"
+        case .yggdrasil: "添加外置登录账号（如 LittleSkin）"
         }
     }
 }
@@ -376,28 +389,31 @@ fileprivate struct Nide8ShortcutButton: View {
     @State private var pendingPrefill: String? = nil
 
     var body: some View {
-        MyListItem {
-            HStack {
-                Image("ServerIcon")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 25)
-                VStack(alignment: .leading) {
-                    Text("Nide8 快捷登录")
-                        .foregroundStyle(Color("TextColor"))
-                    Text("使用 Nide8 验证服务器（auth.mc-user.com:233）")
-                        .foregroundStyle(Color(hex: 0x8C8C8C))
-                }
-                .font(.custom("PCL English", size: 14))
-                Spacer()
-            }
-            .frame(height: 32)
-            .padding(5)
-        }
-        .onTapGesture {
+        Button {
             // 把 Nide8 默认 URL 通过 UserDefaults 传给 NewYggdrasilAccountView
             UserDefaults.standard.set(Nide8AccountHelper.defaultURL.absoluteString, forKey: "PCLMac.Nide8.PrefillURL")
             state.type = .yggdrasil
+        } label: {
+            MyListItem {
+                HStack {
+                    Image("ServerIcon")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 25)
+                    VStack(alignment: .leading) {
+                        Text("Nide8 快捷登录")
+                            .foregroundStyle(Color("TextColor"))
+                        Text("使用 Nide8 验证服务器（auth.mc-user.com:233）")
+                            .foregroundStyle(Color(hex: 0x8C8C8C))
+                    }
+                    .font(.system(size: 14))
+                    Spacer()
+                }
+                .frame(height: 32)
+                .padding(5)
+            }
         }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Nide8 快捷登录")
     }
 }

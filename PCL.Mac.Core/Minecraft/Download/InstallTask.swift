@@ -13,6 +13,7 @@ public class InstallTask: ObservableObject, Identifiable, Hashable, Equatable {
     @Published public var remainingFiles: Int = -1
     @Published public var totalFiles: Int = -1
     @Published public var currentStagePercentage: Double = 0
+    @Published public private(set) var failureReason: String?
     
     public let id: UUID = UUID()
     public var callback: (() -> Void)? = nil
@@ -43,11 +44,32 @@ public class InstallTask: ObservableObject, Identifiable, Hashable, Equatable {
     }
     
     public func getProgress() -> Double {
-        Double(totalFiles - remainingFiles) / Double(totalFiles)
+        guard totalFiles > 0 else { return 0 }
+        return Double(totalFiles - remainingFiles) / Double(totalFiles)
+    }
+
+    public func prepareForStart() {
+        failureReason = nil
+        stage = .before
+        currentStagePercentage = 0
+    }
+
+    public func fail(_ error: Error) {
+        let message = error.localizedDescription
+        err("安装任务失败：\(message)")
+        DispatchQueue.main.async {
+            self.failureReason = message
+        }
+    }
+
+    public func retry() {
+        guard failureReason != nil else { return }
+        start()
     }
     
     public func complete() {
         log("下载任务结束")
+        failureReason = nil
         self.flushProgress()
         self.updateStage(.end)
         DispatchQueue.main.async {
@@ -128,6 +150,7 @@ public class InstallTasks: ObservableObject, Identifiable, Hashable, Equatable {
     }
     
     public func getProgress() -> Double {
+        guard !tasks.isEmpty else { return 0 }
         var progress: Double = 0
         for task in tasks.values {
             progress += task.getProgress()

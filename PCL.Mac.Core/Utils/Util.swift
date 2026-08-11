@@ -120,30 +120,32 @@ public class Util {
     }
     
     public static func unzip(archiveURL: URL, destination: URL, replace: Bool = true) {
-        let archive: Archive
         do {
-            archive = try Archive(url: archiveURL, accessMode: .read)
+            try unzipOrThrow(archiveURL: archiveURL, destination: destination, replace: replace)
         } catch {
-            err("无法读取文件: \(error.localizedDescription)")
-            return
+            err("无法解压文件: \(error.localizedDescription)")
         }
-        
+    }
+
+    /// 解压失败时向调用方报告错误，供安装事务决定是否回滚。
+    public static func unzipOrThrow(archiveURL: URL, destination: URL, replace: Bool = true) throws {
+        let archive = try Archive(url: archiveURL, accessMode: .read)
         for entry in archive {
-            do {
-                let rootURL = destination.standardizedFileURL
-                let destinationFileURL = rootURL.appendingPathComponent(entry.path).standardizedFileURL
-                guard destinationFileURL.path == rootURL.path
-                        || destinationFileURL.path.hasPrefix(rootURL.path + "/") else {
-                    throw MyLocalizedError(reason: "压缩包包含不安全路径：\(entry.path)")
-                }
-                if FileManager.default.fileExists(atPath: destinationFileURL.path) && replace {
-                    try FileManager.default.removeItem(at: destinationFileURL)
-                    debug("已删除重复文件 \(destinationFileURL.lastPathComponent)")
-                }
-                _ = try archive.extract(entry, to: destinationFileURL)
-            } catch {
-                err("无法解压文件: \(error.localizedDescription)")
+            guard entry.type != .symlink else {
+                throw MyLocalizedError(reason: "压缩包包含不受支持的符号链接：\(entry.path)")
             }
+            let rootURL = destination.standardizedFileURL
+            let destinationFileURL = rootURL.appendingPathComponent(entry.path).standardizedFileURL
+            guard destinationFileURL.path == rootURL.path
+                    || destinationFileURL.path.hasPrefix(rootURL.path + "/") else {
+                throw MyLocalizedError(reason: "压缩包包含不安全路径：\(entry.path)")
+            }
+            if FileManager.default.fileExists(atPath: destinationFileURL.path) {
+                guard replace else { continue }
+                try FileManager.default.removeItem(at: destinationFileURL)
+                debug("已删除重复文件 \(destinationFileURL.lastPathComponent)")
+            }
+            _ = try archive.extract(entry, to: destinationFileURL)
         }
     }
     

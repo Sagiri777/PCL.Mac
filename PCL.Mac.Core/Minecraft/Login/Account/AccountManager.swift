@@ -13,7 +13,7 @@ public protocol Account: Codable, Identifiable {
     var id: UUID { get }
     var uuid: UUID { get }
     var name: String { get }
-    func putAccessToken(options: LaunchOptions) async
+    func putAccessToken(options: LaunchOptions) async throws
 }
 
 public enum AnyAccount: Account, Identifiable, Equatable {
@@ -37,7 +37,43 @@ public enum AnyAccount: Account, Identifiable, Equatable {
         lhs.id == rhs.id
     }
     
-    public func putAccessToken(options: LaunchOptions) async { await account.putAccessToken(options: options) }
+    public func putAccessToken(options: LaunchOptions) async throws {
+        try await account.putAccessToken(options: options)
+    }
+
+    var credentialsAreSecure: Bool {
+        switch self {
+        case .offline:
+            return true
+        case .microsoft(let account):
+            return account.credentialsAreSecure
+        case .yggdrasil(let account):
+            return account.credentialsAreSecure
+        }
+    }
+
+    @discardableResult
+    func migrateLegacyCredentials() -> Bool {
+        switch self {
+        case .offline:
+            return true
+        case .microsoft(let account):
+            return account.migrateLegacyCredentials()
+        case .yggdrasil(let account):
+            return account.migrateLegacyCredentials()
+        }
+    }
+
+    func removeStoredCredentials() {
+        switch self {
+        case .offline:
+            break
+        case .microsoft(let account):
+            account.removeStoredCredentials()
+        case .yggdrasil(let account):
+            account.removeStoredCredentials()
+        }
+    }
     
     // MARK: - Codable
     private enum CodingKeys: String, CodingKey { case type, payload }
@@ -120,7 +156,7 @@ public enum AnyAccount: Account, Identifiable, Equatable {
                let skinURLString = json["skin_url"].string,
                !skinURLString.isEmpty,
                let skinURL = URL(string: skinURLString) {
-                log("JSON API \(url.host ?? "?") → skin_url: \(skinURLString)")
+                log("JSON API \(url.host ?? "?") 返回头像地址，目标主机=\(skinURL.host ?? "?")")
                 let png = await Requests.get(skinURL, ignoredFailureStatusCodes: Array(400...599))
                 if png.statusCode == 200, let bytes = png.data, SkinCacheStorage.isAvatarImage(bytes) {
                     log("skin_url 拉取成功: \(bytes.count) bytes")
@@ -150,6 +186,19 @@ public class AccountManager: ObservableObject {
     @CodableAppStorage("accounts") public var accounts: [AnyAccount] = []
     
     @CodableAppStorage("accountId") public var accountId: UUID? = nil
+
+    private init() {
+        let loadedAccounts = accounts
+        // 不使用 allSatisfy：它会在首个失败后短路，导致后续账号连迁移机会都没有。
+        let migrationResults = loadedAccounts.map { $0.migrateLegacyCredentials() }
+        let migratedAll = migrationResults.allSatisfy { $0 }
+        if migratedAll {
+            // 重新编码会移除旧版本账号 JSON 内的明文 token。
+            accounts = loadedAccounts
+        } else {
+            err("部分旧版账号凭据未能迁移到 Keychain，已保留原数据以避免凭据丢失。")
+        }
+    }
     
     public func getAccount() -> AnyAccount? {
         if accountId == nil {
@@ -167,5 +216,14 @@ public class AccountManager: ObservableObject {
         warn("accountId 对应的账号不存在！")
         accountId = nil
         return nil
+    }
+
+    public func removeAccount(id: UUID) {
+        guard let account = accounts.first(where: { $0.id == id }) else { return }
+        account.removeStoredCredentials()
+        accounts.removeAll { $0.id == id }
+        if accountId == id {
+            accountId = accounts.first?.id
+        }
     }
 }

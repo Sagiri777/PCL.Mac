@@ -8,6 +8,7 @@
 import PCL_Mac
 import Testing
 
+@Suite(.enabled(if: pclIntegrationTestsEnabled))
 struct TestModSearch {
     @Test func testSearch() async throws {
         let result = try await ModrinthProjectSearcher.shared.search(type: .mod, query: "")

@@ -8,6 +8,7 @@
 import SwiftUI
 
 struct AccountListView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject private var dataManager: DataManager = .shared
     @ObservedObject private var accountManager: AccountManager = .shared
     @ObservedObject private var settings: AppSettings = .shared
@@ -18,17 +19,14 @@ struct AccountListView: View {
                 StaticMyCard(title: "账号列表") {
                     VStack(spacing: 0) {
                         if accountManager.accounts.isEmpty {
-                            Group {
-                                Text("账号列表为空")
-                                Text("去添加一个")
-                                    .foregroundStyle(settings.theme.getTextStyle())
-                                    .onTapGesture {
-                                        dataManager.router.removeLast()
-                                        dataManager.router.append(.newAccount)
-                                    }
+                            Text("账号列表为空")
+                                .font(.system(size: 14))
+                                .foregroundStyle(Color("TextColor"))
+                            Button("添加账号") {
+                                dataManager.router.removeLast()
+                                dataManager.router.append(.newAccount)
                             }
-                            .font(.custom("PCL English", size: 14))
-                            .foregroundStyle(Color("TextColor"))
+                            .buttonStyle(.link)
                         } else {
                             ForEach(accountManager.accounts) { account in
                                 AccountView(account: account)
@@ -41,11 +39,12 @@ struct AccountListView: View {
             .padding(.bottom, 25)
         }
         .scrollIndicators(.never)
-        .animation(.easeInOut(duration: 0.2), value: accountManager.accounts)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: accountManager.accounts)
     }
 }
 
 fileprivate struct AccountView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject private var accountManager: AccountManager = .shared
     @ObservedObject private var dataManager: DataManager = .shared
     @ObservedObject private var settings: AppSettings = .shared
@@ -57,59 +56,63 @@ fileprivate struct AccountView: View {
     var body: some View {
         MyListItem(isSelected: accountManager.accountId == account.id) {
             HStack {
-                MinecraftAvatar(account: account, src: account.uuid.uuidString, size: 40)
-                VStack(alignment: .leading, spacing: 4) {
-                    ZStack(alignment: .leading) {
-                        Text(account.name)
-                            .font(.custom("PCL English", size: 14))
-                            .foregroundStyle(isHovered ? settings.theme.getTextStyle() : AnyShapeStyle(Color("TextColor")))
-                        
+                Button {
+                    accountManager.accountId = account.id
+                } label: {
+                    HStack(spacing: 10) {
+                        MinecraftAvatar(account: account, src: account.uuid.uuidString, size: 40)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(account.name)
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundStyle(isHovered ? settings.theme.getTextStyle() : AnyShapeStyle(Color("TextColor")))
                         Text(account.uuid.uuidString.lowercased())
-                            .font(.custom("PCL English", size: 12))
+                                .font(.system(size: 11, design: .monospaced))
                             .foregroundStyle(Color(hex: 0x8C8C8C))
                             .textSelection(.enabled)
-                            .offset(x: 200)
+                            MyTag(label: account.authMethodName, backgroundColor: Color(hex: 0x8C8C8C, alpha: 0.2))
+                                .font(.system(size: 11))
+                                .foregroundStyle(Color("TextColor"))
+                        }
+                        Spacer()
                     }
-                    
-                    MyTag(label: account.authMethodName, backgroundColor: Color(hex: 0x8C8C8C, alpha: 0.2))
-                        .font(.custom("PCL English", size: 12))
-                        .foregroundStyle(Color("TextColor"))
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel("选择账号 \(account.name)，\(account.authMethodName)")
                 Spacer()
-                if isHovered {
-                    HStack {
-                        Image("RefreshIcon")
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                Task {
-                                    do {
-                                        try await SkinCacheStorage.shared.loadSkin(account: account)
-                                        hint("刷新成功！", .finish)
-                                    } catch {
-                                        hint("无法刷新头像：\(error.localizedDescription)", .critical)
-                                    }
-                                }
+                HStack {
+                    Button {
+                        Task {
+                            do {
+                                try await SkinCacheStorage.shared.loadSkin(account: account)
+                                hint("刷新成功！", .finish)
+                            } catch {
+                                hint("无法刷新头像：\(error.localizedDescription)", .critical)
                             }
-                        
+                        }
+                    } label: {
+                        Image("RefreshIcon")
+                    }
+                    .buttonStyle(.plain)
+                    .help("刷新头像")
+                    .accessibilityLabel("刷新 \(account.name) 的头像")
+                    Button(role: .destructive) {
+                        accountManager.removeAccount(id: account.id)
+                    } label: {
                         Image(systemName: "xmark")
                             .bold()
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                accountManager.accounts.removeAll(where: { $0.id == account.id })
-                            }
                     }
-                    .foregroundStyle(AppSettings.shared.theme.getTextStyle())
-                    .padding()
+                    .buttonStyle(.plain)
+                    .help("删除账号")
+                    .accessibilityLabel("删除账号 \(account.name)")
                 }
+                .foregroundStyle(AppSettings.shared.theme.getTextStyle())
+                .padding(.horizontal, 8)
             }
         }
-        .animation(.easeInOut(duration: 0.2), value: isHovered)
-        .animation(.easeInOut(duration: 0.2), value: accountManager.accountId)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: isHovered)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: accountManager.accountId)
         .onHover { hover in
             isHovered = hover
-        }
-        .onTapGesture {
-            accountManager.accountId = account.id
         }
     }
 }

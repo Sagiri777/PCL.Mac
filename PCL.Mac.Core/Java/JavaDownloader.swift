@@ -81,8 +81,12 @@ public class JavaInstallTask: InstallTask {
     public override func getProgress() -> Double { progress }
     
     public override func start() {
-        let temp = TemperatureDirectory(name: "JavaDownload")
+        prepareForStart()
+        progress = 0
+        remainingFiles = 1
+        let temp = TemperatureDirectory(name: "JavaDownload-\(id.uuidString)")
         Task {
+            defer { temp.free() }
             do {
                 updateStage(.javaDownload)
                 let zipDestination = temp.root.appending(path: "\(package.name).zip")
@@ -92,33 +96,27 @@ public class JavaInstallTask: InstallTask {
                 }
                 completeOneFile()
                 updateStage(.javaInstall)
-                
-                Util.unzip(archiveURL: zipDestination, destination: temp.root, replace: false)
+
+                try Util.unzipOrThrow(archiveURL: zipDestination, destination: temp.root, replace: false)
                 self.progress = 0.75
-                
-                
+
                 guard let majorVersion = package.version.first else {
                     throw MyLocalizedError(reason: "Java 下载响应缺少版本号")
                 }
                 let javaDirectoryPath = temp.root.appending(path: package.name).appending(path: "zulu-\(majorVersion).\(package.type.rawValue)")
                 if !FileManager.default.fileExists(atPath: javaDirectoryPath.path) {
-                    throw MyLocalizedError(reason: "发生未知错误")
+                    throw MyLocalizedError(reason: "Java 压缩包结构无效，未找到运行时目录。")
                 }
-                
+
                 let saveURL = JavaInstallTask.defaultJavaInstallDirectory.appending(path: javaDirectoryPath.lastPathComponent)
-                
-                try? FileManager.default.createDirectory(
-                    at: saveURL.parent(),
-                    withIntermediateDirectories: true
-                )
-                try? FileManager.default.copyItem(at: javaDirectoryPath, to: saveURL)
+                try Self.installAtomically(from: javaDirectoryPath, to: saveURL)
                 self.progress = 1
-                temp.free()
+                self.currentStagePercentage = 1
                 hint("Java \(package.versionString) 安装完成！", .finish)
                 complete()
             } catch {
-                hint("无法安装 Java：\(error.localizedDescription)")
-                complete()
+                hint("无法安装 Java：\(error.localizedDescription)", .critical)
+                fail(error)
             }
         }
     }
@@ -131,13 +129,67 @@ public class JavaInstallTask: InstallTask {
             if foundCurrent {
                 result[stage] = .waiting
             } else if self.stage == stage {
-                result[stage] = .inprogress
+                result[stage] = failureReason == nil ? .inprogress : .failed
                 foundCurrent = true
             } else {
                 result[stage] = .finished
             }
         }
         return result
+    }
+
+    static func installAtomically(from sourceURL: URL, to destinationURL: URL) throws {
+        let fileManager = FileManager.default
+        let parentURL = destinationURL.deletingLastPathComponent()
+        try fileManager.createDirectory(at: parentURL, withIntermediateDirectories: true)
+
+        let transactionID = UUID().uuidString
+        let stagingURL = parentURL.appendingPathComponent(".\(destinationURL.lastPathComponent).pcl-staging-\(transactionID)")
+        let backupURL = parentURL.appendingPathComponent(".\(destinationURL.lastPathComponent).pcl-backup-\(transactionID)")
+        defer {
+            try? fileManager.removeItem(at: stagingURL)
+            try? fileManager.removeItem(at: backupURL)
+        }
+
+        try fileManager.copyItem(at: sourceURL, to: stagingURL)
+        try validateJava(at: stagingURL)
+
+        let hadExistingInstall = fileManager.fileExists(atPath: destinationURL.path)
+        if hadExistingInstall {
+            try fileManager.moveItem(at: destinationURL, to: backupURL)
+        }
+        do {
+            try fileManager.moveItem(at: stagingURL, to: destinationURL)
+            try validateJava(at: destinationURL)
+        } catch {
+            try? fileManager.removeItem(at: destinationURL)
+            if hadExistingInstall, fileManager.fileExists(atPath: backupURL.path) {
+                try? fileManager.moveItem(at: backupURL, to: destinationURL)
+            }
+            throw error
+        }
+    }
+
+    static func validateJava(at bundleURL: URL) throws {
+        let executableURL = bundleURL
+            .appendingPathComponent("Contents")
+            .appendingPathComponent("Home")
+            .appendingPathComponent("bin")
+            .appendingPathComponent("java")
+        guard FileManager.default.isExecutableFile(atPath: executableURL.path) else {
+            throw MyLocalizedError(reason: "安装包内没有可执行的 Java。")
+        }
+
+        let process = Process()
+        process.executableURL = executableURL
+        process.arguments = ["-version"]
+        process.standardOutput = Pipe()
+        process.standardError = Pipe()
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            throw MyLocalizedError(reason: "Java 自检失败，退出代码为 \(process.terminationStatus)。")
+        }
     }
 }
 

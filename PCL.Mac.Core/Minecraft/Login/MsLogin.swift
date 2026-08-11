@@ -328,7 +328,7 @@ public class MsLogin {
 
 public enum OAuthCallbackError: Error, LocalizedError {
     case userCancelled
-    case malformedURL(String)
+    case malformedURL
     case missingCode
     case serverError(String)
 
@@ -336,8 +336,8 @@ public enum OAuthCallbackError: Error, LocalizedError {
         switch self {
         case .userCancelled:
             return "用户取消了登录"
-        case .malformedURL(let s):
-            return "回调 URL 格式异常：\(s)"
+        case .malformedURL:
+            return "回调 URL 格式异常"
         case .missingCode:
             return "回调 URL 中未找到 code 参数"
         case .serverError(let s):
@@ -371,7 +371,8 @@ public final class OAuthSession: ObservableObject {
     /// 注册来自 AppDelegate 的回调 URL。
     public func handle(url: URL) {
         guard let cb = parseCallback(url: url) else {
-            finish(.failure(OAuthCallbackError.malformedURL(url.absoluteString)))
+            // OAuth 回调 URL 可能包含一次性授权码，错误信息不得回显原始 URL。
+            finish(.failure(OAuthCallbackError.malformedURL))
             return
         }
         finish(.success(cb))
@@ -454,7 +455,7 @@ extension MsLogin {
         let expiresIn = max(1, deviceResponse.expiresIn)
         let verificationURI = deviceResponse.verificationUri
 
-        log("设备码获取成功: user_code=\(userCode), 验证页=\(verificationURI), 过期=\(expiresIn)s")
+        log("设备码获取成功，验证页主机=\(URL(string: verificationURI)?.host ?? "未知")，过期=\(expiresIn)s")
 
         // 2. 复制验证码到剪贴板
         let pb = NSPasteboard.general
@@ -502,11 +503,11 @@ extension MsLogin {
             err("Device Code 响应中缺少 refresh_token")
             throw OAuthCallbackError.serverError("设备码响应缺少 refresh_token")
         }
-        log("成功获取 microsoftonline.com access_token, 长度=\(accessToken.count)")
+        log("成功获取 Microsoft 登录令牌")
 
         // 6. access_token → XBL
         let xblToken = try await getXBLToken(accessToken: accessToken)
-        log("成功获取 XBL token, userHash=\(xblToken.userHash)")
+        log("成功获取 XBL 令牌")
 
         // 7. XBL → XSTS
         let xsts = try await getXSTSToken(xblToken: xblToken.token, userHash: xblToken.userHash)
@@ -539,15 +540,14 @@ extension MsLogin {
         ]
         let response = await Requests.post(MinecraftOfficialClient.deviceCodeURL, body: body, encodeMethod: .urlEncoded, category: .microsoftLogin)
         guard let json = response.json else {
-            let raw = response.data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
-            err("获取设备码失败: HTTP \(response.statusCode), raw=\(raw)")
-            throw OAuthCallbackError.serverError("获取设备码失败: \(raw)")
+            err("获取设备码失败: HTTP \(response.statusCode)，响应无法解析")
+            throw OAuthCallbackError.serverError("获取设备码失败（HTTP \(response.statusCode)）")
         }
         guard let dc = json["device_code"].string,
               let uc = json["user_code"].string,
               let vu = json["verification_uri"].string else {
-            err("设备码响应字段缺失: \(json)")
-            throw OAuthCallbackError.serverError("设备码响应字段缺失: \(json)")
+            err("设备码响应缺少必需字段")
+            throw OAuthCallbackError.serverError("设备码响应缺少必需字段")
         }
         return DeviceCodeResponse(
             deviceCode: dc,
@@ -606,18 +606,7 @@ extension MsLogin {
             "RelyingParty": "http://auth.xboxlive.com",
             "TokenType": "JWT"
         ]
-        // 打印实际发送的 JSON body（token 截断）
-        let debugBody: [String: Any] = [
-            "Properties": ["AuthMethod": "RPS",
-                           "SiteName": "user.auth.xboxlive.com",
-                           "RpsTicket": "d=\(String(accessToken.prefix(30)))...(\(accessToken.count) chars)"],
-            "RelyingParty": "http://auth.xboxlive.com",
-            "TokenType": "JWT"
-        ]
-        if let debugData = try? JSONSerialization.data(withJSONObject: debugBody, options: [.prettyPrinted, .withoutEscapingSlashes]),
-           let debugStr = String(data: debugData, encoding: .utf8) {
-            log("XBL 请求 body: \(debugStr)")
-        }
+        debug("正在请求 XBL Token")
         let response = await Requests.post(
             URL(string: "https://user.auth.xboxlive.com/user/authenticate")!,
             headers: [
@@ -631,9 +620,8 @@ extension MsLogin {
         )
         log("XBL 请求发送, HTTP状态码=\(response.statusCode)")
         guard let json = response.json else {
-            let rawBody = response.data.flatMap { String(data: $0, encoding: .utf8) } ?? "(无法解码)"
-            err("XBL 认证失败: HTTP \(response.statusCode), 响应为空, raw body=\(rawBody), token前20字符=\(String(accessToken.prefix(20)))")
-            throw OAuthCallbackError.serverError("XBL HTTP \(response.statusCode): \(rawBody)")
+            err("XBL 认证失败：HTTP \(response.statusCode)，响应无法解析")
+            throw OAuthCallbackError.serverError("XBL HTTP \(response.statusCode)")
         }
         // XBL 可能返回 XErr（如 2148916233 表示账号无 Xbox profile）
         if let xerr = json["XErr"].int, xerr != 0 {
@@ -642,8 +630,8 @@ extension MsLogin {
             throw OAuthCallbackError.serverError("XBL XErr=\(xerr): \(message)")
         }
         guard let token = json["Token"].string else {
-            err("XBL Token 字段缺失: \(json)")
-            throw OAuthCallbackError.serverError("XBL Token 字段缺失：\(json)")
+            err("XBL 响应缺少 Token 字段")
+            throw OAuthCallbackError.serverError("XBL 响应缺少 Token 字段")
         }
         guard let uhs = json["DisplayClaims"]["xui"].array?.first?["uhs"].string else {
             throw OAuthCallbackError.serverError("XBL userHash 缺失")
@@ -693,7 +681,7 @@ extension MsLogin {
             throw OAuthCallbackError.serverError("Minecraft 登录响应为空")
         }
         guard let accessToken = json["access_token"].string else {
-            throw OAuthCallbackError.serverError("Minecraft access_token 缺失：\(json)")
+            throw OAuthCallbackError.serverError("Minecraft 登录响应缺少 access_token")
         }
         return accessToken
     }

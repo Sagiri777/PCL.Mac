@@ -213,7 +213,13 @@ public class MinecraftInstance: Identifiable, Equatable, Hashable {
             launchOptions.playerName = account.name
             launchOptions.uuid = account.uuid
             log("正在登录")
-            await account.putAccessToken(options: launchOptions)
+            do {
+                try await account.putAccessToken(options: launchOptions)
+            } catch {
+                err("登录失败：\(error.localizedDescription)")
+                hint("登录失败：\(error.localizedDescription)", .critical)
+                return
+            }
             if case .yggdrasil = account {
                 try? await MinecraftLauncher.downloadAuthlibInjector() // 后面改成可抛出 + 多阶段
             }

@@ -9,6 +9,7 @@ import Foundation
 import PCL_Mac
 import Testing
 
+@Suite(.enabled(if: pclIntegrationTestsEnabled))
 struct DownloaderTests {
     @Test func testSingleFileDownload() async throws {
         try await SingleFileDownloader.download(url: "https://bmclapi2.bangbang93.com/version/1.21/client".url, destination: URL(fileURLWithUserPath: "~/test.file"), replaceMethod: .replace) { progress in

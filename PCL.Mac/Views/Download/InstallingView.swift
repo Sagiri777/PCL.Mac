@@ -57,7 +57,26 @@ struct InstallingView: View {
             VStack {
                 ForEach(tasks.getTasks()) { task in
                     StaticMyCard(title: task.getTitle()) {
-                        getEntries(task)
+                        VStack(alignment: .leading, spacing: 12) {
+                            getEntries(task)
+                            if let failureReason = task.failureReason {
+                                Text(failureReason)
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(.red)
+                                    .textSelection(.enabled)
+                                    .accessibilityLabel("安装失败：\(failureReason)")
+                                HStack {
+                                    Button("重试") { task.retry() }
+                                        .keyboardShortcut(.defaultAction)
+                                    Button("关闭任务") {
+                                        dataManager.inprogressInstallTasks = nil
+                                        if case .installing = dataManager.router.getLast() {
+                                            dataManager.router.removeLast()
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                     .padding()
                 }

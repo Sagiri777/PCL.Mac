@@ -29,10 +29,6 @@ BUILD_SETTINGS=()
 if [[ -n "${CLIENT_ID:-}" ]]; then
   BUILD_SETTINGS+=("CLIENT_ID=$CLIENT_ID")
 fi
-if [[ -n "${ARTIFACT_PAT:-}" ]]; then
-  BUILD_SETTINGS+=("ARTIFACT_PAT=$ARTIFACT_PAT")
-fi
-
 echo "==> Project: $PROJECT_PATH"
 echo "==> Scheme: $SCHEME ($CONFIGURATION)"
 if [[ -n "${http_proxy:-}" || -n "${https_proxy:-}" ]]; then

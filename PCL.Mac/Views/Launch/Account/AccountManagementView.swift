@@ -100,16 +100,18 @@ fileprivate struct AccountView: View {
                     }
                 }
                 Spacer()
-                MyListItem {
+                Button {
+                    accountManager.removeAccount(id: account.id)
+                } label: {
                     Image(systemName: "xmark")
                         .bold()
                         .foregroundStyle(Color("TextColor"))
                         .padding(2)
                 }
+                .buttonStyle(.plain)
                 .padding()
-                .onTapGesture {
-                    accountManager.accounts.removeAll(where: { $0.id == account.id })
-                }
+                .help("删除账号")
+                .accessibilityLabel("删除账号 \(account.name)")
             }
         }
         .animation(.easeInOut(duration: 0.2), value: isHovered)

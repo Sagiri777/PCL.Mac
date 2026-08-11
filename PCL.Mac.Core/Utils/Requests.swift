@@ -151,7 +151,8 @@ public final class Requests: @unchecked Sendable {
             let session = Self.makeSession(forceUseProxy: Self.shouldUseProxy(for: category))
             let (data, response) = try await session.data(for: request)
             if let response = response as? HTTPURLResponse, response.statusCode != 200 && !ignoredFailureStatusCodes.contains(response.statusCode) {
-                debug("\(url.absoluteString) 返回了 \(response.statusCode): \(String(data: data, encoding: .utf8) ?? "(empty)")")
+                // 响应体可能包含 OAuth code/token、带签名 URL 或账号信息；日志只留诊断所需元数据。
+                debug("请求 \(url.host ?? "未知主机") 返回 HTTP \(response.statusCode)（\(data.count) bytes）")
             }
             let httpResp = response as? HTTPURLResponse
             let code = httpResp?.statusCode ?? 0

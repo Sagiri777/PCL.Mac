@@ -16,7 +16,6 @@
 
 import Foundation
 
-public let ARTIFACT_PAT: String = "{{ARTIFACT_PAT}}"
 public let CLIENT_ID: String = "{{CLIENT_ID}}"
 
 public enum SecretsError: LocalizedError {
@@ -48,21 +47,6 @@ public enum SecretsError: LocalizedError {
 }
 
 public class Secrets {
-    public static func getArtifactPAT() -> String? {
-        if let env = ProcessInfo.processInfo.environment["ARTIFACT_PAT"], !env.isEmpty {
-            return env
-        }
-        if let infoValue = Bundle.main.object(forInfoDictionaryKey: "ARTIFACT_PAT") as? String,
-           !infoValue.isEmpty,
-           !infoValue.starts(with: "{{") {
-            return infoValue
-        }
-        if !ARTIFACT_PAT.isEmpty && !ARTIFACT_PAT.starts(with: "{{") {
-            return ARTIFACT_PAT
-        }
-        return nil
-    }
-
     public static func getClientID() throws -> String {
         // 1. 环境变量
         if let env = ProcessInfo.processInfo.environment["CLIENT_ID"], !env.isEmpty {

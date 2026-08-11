@@ -9,6 +9,24 @@
 import Foundation
 import SwiftyJSON
 
+private let liteLoaderMirrorRoot = URL(string: "https://bmclapi.bangbang93.com/maven/com/mumfrey/liteloader/")!
+
+/// LiteLoader 的旧清单仍可能返回 HTTP Maven 地址。只升级已知官方仓库，
+/// 未知的明文地址直接拒绝，避免重新放宽整个应用的 ATS 策略。
+private func secureLiteLoaderRepositoryURL(_ rawValue: String) -> URL? {
+    guard var components = URLComponents(string: rawValue), let host = components.host?.lowercased() else {
+        return nil
+    }
+    if components.scheme?.lowercased() == "http" {
+        guard ["repo.maven.apache.org", "repo1.maven.org", "dl.liteloader.com"].contains(host) else {
+            return nil
+        }
+        components.scheme = "https"
+    }
+    guard components.scheme?.lowercased() == "https" else { return nil }
+    return components.url
+}
+
 public struct LiteLoaderVersion: Codable, Sendable, Identifiable, Hashable {
     public var id: String { "\(mcversion)-\(snapshot)" }
     public let mcversion: String
@@ -30,22 +48,23 @@ public struct LiteLoaderVersion: Codable, Sendable, Identifiable, Hashable {
 
     public var artifactURL: URL {
         // type=m2: 直接 maven URL
-        // 例：http://repo.maven.apache.org/maven2/com/mumfrey/liteloader/<version>/liteloader-<version>.jar
-        guard let url = URL(string: repo.url) else {
-            return URL(string: "http://dl.liteloader.com/")!
-        }
-        return url
+        // 旧清单可能提供 HTTP 地址；解析时已将已知仓库升级为 HTTPS。
+        secureLiteLoaderRepositoryURL(repo.url) ?? liteLoaderMirrorRoot
     }
 }
 
 /// LiteLoader 安装器。
-/// 数据源：http://dl.liteloader.com/versions/versions.json
+/// 数据源使用 BMCLAPI 的 HTTPS LiteLoader 清单镜像。
 public enum LiteLoaderInstaller {
-    private static let listURL = URL(string: "http://dl.liteloader.com/versions/versions.json")!
+    private static let listURL = liteLoaderMirrorRoot.appending(path: "versions.json")
 
     /// 拉取版本清单（解析上游 LiteLoader 的 versions.json）。
     public static func fetchVersionList() async throws -> [LiteLoaderVersion] {
-        let json = try await Requests.get(listURL).getJSONOrThrow()
+        let response = await Requests.get(listURL, category: .gameDownload)
+        guard response.statusCode == 200 else {
+            throw response.error ?? MyLocalizedError(reason: "LiteLoader 版本清单请求失败（HTTP \(response.statusCode)）")
+        }
+        let json = try response.getJSONOrThrow()
         // versions.json 顶层是对象，其 "versions" 是 { "<mc版本>": { repo, artefacts, ... } }。
         // JSON 不能直接 as? [String: Any]，必须走 SwiftyJSON 的 .dictionaryValue，否则恒为 nil。
         let versions = json["versions"].dictionaryValue
@@ -57,10 +76,14 @@ public enum LiteLoaderInstaller {
             let repo = info["repo"]
             let artefacts = info["artefacts"].dictionaryValue
             guard let artefact = artefacts["liteloader"]?.stringValue else { continue }
+            guard let repositoryURL = secureLiteLoaderRepositoryURL(repo["url"].stringValue) else {
+                debug("忽略包含不安全仓库地址的 LiteLoader 版本：\(mc)")
+                continue
+            }
             let r = LiteLoaderVersion.Repo(
                 stream: repo["stream"].string ?? "RELEASE",
                 type: repo["type"].string ?? "m2",
-                url: repo["url"].string ?? ""
+                url: repositoryURL.absoluteString
             )
             let artMap = artefacts.mapValues { $0.stringValue }
             out.append(LiteLoaderVersion(
@@ -90,9 +113,13 @@ public enum LiteLoaderInstaller {
         try FileManager.default.createDirectory(at: versionDir, withIntermediateDirectories: true)
 
         // 1. 下载 jar
-        guard let downloadURL = URL(string: "\(version.repo.url)/com/mumfrey/liteloader/\(version.artefact)/\(version.artefact).jar") else {
+        guard let repositoryURL = secureLiteLoaderRepositoryURL(version.repo.url) else {
             throw MyLocalizedError(reason: "LiteLoader 下载地址无效")
         }
+        let downloadURL = repositoryURL
+            .appending(path: "com/mumfrey/liteloader")
+            .appending(path: version.artefact)
+            .appending(path: "\(version.artefact).jar")
         log("下载 LiteLoader: \(version.displayName)")
         try await SingleFileDownloader.download(url: downloadURL, destination: jarURL)
 

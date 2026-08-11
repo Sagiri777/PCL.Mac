@@ -6,90 +6,46 @@
 //
 
 import Foundation
-import SwiftyJSON
-import SwiftUI
-
-class NoRedirectSessionDelegate: NSObject, URLSessionDelegate {
-    func urlSession(
-        _ session: URLSession,
-        task: URLSessionTask,
-        willPerformHTTPRedirection response: HTTPURLResponse,
-        newRequest request: URLRequest,
-        completionHandler: @escaping (URLRequest?) -> Void
-    ) {
-        debug("检测到重定向: \(request.url.map { $0.absoluteString } ?? "(无 URL)")")
-        completionHandler(nil)
-    }
-}
+import AppKit
 
 public struct Update {
+    public let version: String
     public let time: Date
     public let url: URL
 }
 
-public class UpdateCheck {
+/// 只检查公开 Release，不在运行中的应用内下载或覆盖可执行文件。
+/// 更新包的签名、公证与来源验证由浏览器和 macOS 安装流程处理。
+public enum UpdateCheck {
+    private static let latestReleaseURL = URL(string: "https://api.github.com/repos/Sagiri777/PCL.Mac/releases/latest")!
+
     public static func getLastUpdate() async -> Update? {
-        var headers = [
-            "Accept": "application/vnd.github+json"
-        ]
-        if let artifactPAT = Secrets.getArtifactPAT() {
-            headers["Authorization"] = "Bearer \(artifactPAT)"
-        }
-        if let json = await Requests.get(
-            "https://api.github.com/repos/PCL-Community/PCL.Mac/actions/artifacts",
-            headers: headers
-        ).json {
-            guard let artifact = json["artifacts"].arrayValue.first else {
-                return nil
+        let response = await Requests.get(
+            latestReleaseURL,
+            headers: ["Accept": "application/vnd.github+json"],
+            category: .other
+        )
+        guard response.statusCode == 200, let json = response.json else {
+            if response.statusCode != 404 {
+                err("GitHub Release 检查失败（HTTP \(response.statusCode)）")
             }
-            let formatter = ISO8601DateFormatter()
-            guard let date = formatter.date(from: artifact["created_at"].stringValue),
-                  let url = artifact["archive_download_url"].url else {
-                err("GitHub 工件响应缺少有效时间或下载地址")
-                return nil
-            }
-            log("最新工件构建时间: \(SharedConstants.shared.dateFormatter.string(from: date))")
-            return .init(time: date, url: url)
+            return nil
         }
-        return nil
+        let formatter = ISO8601DateFormatter()
+        guard let date = formatter.date(from: json["published_at"].stringValue),
+              let url = json["html_url"].url,
+              url.scheme == "https",
+              url.host?.lowercased() == "github.com" else {
+            err("GitHub Release 响应缺少有效版本、时间或 HTTPS 页面")
+            return nil
+        }
+        let version = json["tag_name"].stringValue
+        guard !version.isEmpty else { return nil }
+        return Update(version: version, time: date, url: url)
     }
-    
-    public static func downloadUpdate(_ update: Update) async {
-        var request = URLRequest(url: update.url)
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        if let artifactPAT = Secrets.getArtifactPAT() {
-            request.setValue("Bearer \(artifactPAT)", forHTTPHeaderField: "Authorization")
-        }
 
-        let config = URLSessionConfiguration.default
-        let session = URLSession(configuration: config, delegate: NoRedirectSessionDelegate(), delegateQueue: nil)
-
-        return await withCheckedContinuation { continuation in
-            let task = session.dataTask(with: request) { data, response, error in
-                do {
-                    try data?.write(to: SharedConstants.shared.temperatureURL.appending(path: "LauncherUpdate.zip"))
-                } catch {
-                    err("无法写入文件: \(error.localizedDescription)")
-                }
-                continuation.resume()
-            }
-            task.resume()
-        }
-    }
-    
-    public static func applyUpdate() {
-        let zipURL = SharedConstants.shared.temperatureURL.appending(path: "LauncherUpdate.zip")
-        let appURL = Bundle.main.bundleURL
-        Util.unzip(archiveURL: zipURL, destination: appURL.parent(), replace: true)
-        Util.unzip(archiveURL: appURL.parent().appending(path: "PCL.Mac.zip"), destination: appURL.parent(), replace: true)
-        Util.clearTemp()
-        let executableURL = appURL.appending(path: "Contents").appending(path: "MacOS").appending(path: "PCL.Mac")
-        let process = Process()
-        process.executableURL = executableURL
-        try? process.run()
-        DispatchQueue.main.async {
-            NSApplication.shared.terminate(nil)
-        }
+    @MainActor
+    public static func openReleasePage(_ update: Update) {
+        NSWorkspace.shared.open(update.url)
     }
 }

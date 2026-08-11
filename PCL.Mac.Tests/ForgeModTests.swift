@@ -1,33 +1,39 @@
-//
-//  ForgeModTests.swift
-//  PCL.Mac
-//
-//  Created by YiZhiMCQiu on 2025/8/19.
-//
-
 import Foundation
 import Testing
 import ZIPFoundation
-import PCL_Mac
-import TOMLKit
+@testable import PCL_Mac
 
 struct ForgeModTests {
-    @Test func testModAnalysis() throws {
-        let archive = try Archive(url: URL(fileURLWithUserPath: "~/minecraft/sodium-neoforge-0.6.13+mc1.21.5.jar"), accessMode: .read)
-        let tomlData =
-            (try? ArchiveUtil.getEntryOrThrow(archive: archive, name: "META-INF/mods.toml")) ??
-            (try? ArchiveUtil.getEntryOrThrow(archive: archive, name: "META-INF/neoforge.mods.toml"))
-        
-        let toml = try TOMLTable(string: String(data: tomlData.unwrap(), encoding: .utf8)!)
-        let modTable = try toml["mods"].unwrap("无法解析 mods.toml")
-            .array.unwrap("无法解析 mods.toml")[0]
-            .table.unwrap("无法解析 mods.toml")
-        
-        let modId = modTable["modId"]?.string ?? ""
-        let displayName = modTable["displayName"]?.string ?? ""
-        let description = modTable["description"]?.string ?? ""
-        print("modId: \(modId)")
-        print("displayName: \(displayName)")
-        print("description: \(description)")
+    @Test func parsesForgeMetadataFromAnIsolatedFixture() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "pcl-forge-mod-tests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let payload = root.appending(path: "payload")
+        let metadataURL = payload.appending(path: "META-INF/mods.toml")
+        try FileManager.default.createDirectory(
+            at: metadataURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data("""
+        modLoader="javafml"
+        loaderVersion="[1,)"
+        license="MIT"
+
+        [[mods]]
+        modId="fixture_mod"
+        version="1.2.3"
+        displayName="Fixture Mod"
+        description="Deterministic Forge fixture"
+        """.utf8).write(to: metadataURL)
+
+        let archiveURL = root.appending(path: "fixture.jar")
+        try FileManager.default.zipItem(at: payload, to: archiveURL, shouldKeepParent: false)
+
+        let mod = try #require(Mod.loadMod(url: archiveURL))
+        #expect(mod.id == "fixture_mod")
+        #expect(mod.name == "Fixture Mod")
+        #expect(mod.version == "1.2.3")
+        #expect(mod.brand == .forge)
     }
 }

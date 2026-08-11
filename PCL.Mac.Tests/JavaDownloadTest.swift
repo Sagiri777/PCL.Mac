@@ -11,14 +11,14 @@ import PCL_Mac
 import SwiftyJSON
 
 struct JavaDownloadTest {
-    @Test func testFetchVersions() async throws {
+    @Test(.enabled(if: pclIntegrationTestsEnabled)) func testFetchVersions() async throws {
         let packages = try await JavaDownloader.search(version: "1.8")
         for package in packages.prefix(10) {
             print(package.versionString)
         }
     }
     
-    @Test func testDownloadJava() async throws {
+    @Test(.enabled(if: pclIntegrationTestsEnabled)) func testDownloadJava() async throws {
         let package = try await JavaDownloader.search().first!
         let task = JavaInstallTask(package: package)
         await withCheckedContinuation { continuation in

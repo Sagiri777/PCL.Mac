@@ -38,31 +38,66 @@ public class PlayerProfile: Codable {
     }
 }
 
+private actor MicrosoftTokenRefreshCoordinator {
+    private var inFlight: Task<(AuthToken, String), Error>?
+
+    func refresh(accountID: UUID, refreshToken: String) async throws -> (AuthToken, String) {
+        if let inFlight {
+            return try await inFlight.value
+        }
+
+        let task = Task<(AuthToken, String), Error> {
+            guard let authToken = try await MsLogin.refreshAccessTokenLive(refreshToken) else {
+                throw MyLocalizedError(reason: "微软登录凭据已失效，请重新登录。")
+            }
+            guard let minecraftToken = try await MsLogin.getMinecraftAccessToken(
+                id: accountID,
+                authToken.accessToken
+            ) else {
+                throw MyLocalizedError(reason: "无法获取 Minecraft Access Token，请稍后重试。")
+            }
+            return (authToken, minecraftToken)
+        }
+        inFlight = task
+        defer { inFlight = nil }
+        return try await task.value
+    }
+}
+
 public class MicrosoftAccount: Account {
     public let id: UUID
-    public var refreshToken: String
     public var profile: PlayerProfile
-    public var isTokenRefreshing: Bool = false
+    private var legacyRefreshToken: String?
+    private lazy var refreshCoordinator = MicrosoftTokenRefreshCoordinator()
     
     public var name: String { profile.name }
     public var uuid: UUID { profile.uuid }
     
-    public func refreshAccessToken() async {
-        if isTokenRefreshing { return }
-        isTokenRefreshing = true
-        if AccessTokenStorage.shared.getTokenInfo(for: id) != nil {
+    @discardableResult
+    public func refreshAccessToken() async throws -> String {
+        if let token = AccessTokenStorage.shared.getTokenInfo(for: id)?.accessToken {
             debug("无需刷新 Access Token")
-            return
+            return token
         }
-        
-        if let authToken = try? await MsLogin.refreshAccessTokenLive(self.refreshToken) {
-            if (try? await MsLogin.getMinecraftAccessToken(id: id, authToken.accessToken)) != nil {
-                self.refreshToken = authToken.refreshToken
-                debug("成功刷新 Access Token")
-                return
-            }
+
+        guard let refreshToken = secureRefreshToken, !refreshToken.isEmpty else {
+            throw MyLocalizedError(reason: "微软登录凭据不存在，请重新登录。")
         }
-        err("无法刷新 Access Token")
+
+        let (authToken, minecraftToken) = try await refreshCoordinator.refresh(
+            accountID: id,
+            refreshToken: refreshToken
+        )
+        guard SecureCredentialStore.shared.set(
+            authToken.refreshToken,
+            kind: .microsoftRefreshToken,
+            accountID: id
+        ) else {
+            throw MyLocalizedError(reason: "无法安全保存微软登录凭据，请检查 Keychain 权限。")
+        }
+        legacyRefreshToken = nil
+        debug("成功刷新 Access Token")
+        return minecraftToken
     }
     
     enum CodingKeys: CodingKey {
@@ -71,10 +106,16 @@ public class MicrosoftAccount: Account {
         case profile
     }
     
-    public init(refreshToken: String, profile: PlayerProfile) {
+    public init(refreshToken: String, profile: PlayerProfile) throws {
         self.id = .init()
-        self.refreshToken = refreshToken
         self.profile = profile
+        guard SecureCredentialStore.shared.set(
+            refreshToken,
+            kind: .microsoftRefreshToken,
+            accountID: id
+        ) else {
+            throw MyLocalizedError(reason: "无法将微软登录凭据保存到 Keychain。")
+        }
     }
     
     public static func create(_ authToken: AuthToken) async -> MicrosoftAccount? {
@@ -91,15 +132,63 @@ public class MicrosoftAccount: Account {
         }
         do {
             let profile = try PlayerProfile(fromResponse: data)
-            return .init(refreshToken: authToken.refreshToken, profile: profile)
+            return try .init(refreshToken: authToken.refreshToken, profile: profile)
         } catch {
             err("MicrosoftAccount.create 失败：\(error.localizedDescription)")
             return nil
         }
     }
     
-    public func putAccessToken(options: LaunchOptions) async {
-        await self.refreshAccessToken()
-        options.accessToken = AccessTokenStorage.shared.getTokenInfo(for: id)?.accessToken ?? UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+    public func putAccessToken(options: LaunchOptions) async throws {
+        options.accessToken = try await refreshAccessToken()
+    }
+
+    public required init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        profile = try container.decode(PlayerProfile.self, forKey: .profile)
+        legacyRefreshToken = try container.decodeIfPresent(String.self, forKey: .refreshToken)
+        _ = migrateLegacyCredentials()
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(profile, forKey: .profile)
+    }
+
+    var credentialsAreSecure: Bool {
+        SecureCredentialStore.shared.string(
+            kind: .microsoftRefreshToken,
+            accountID: id
+        ) != nil
+    }
+
+    @discardableResult
+    func migrateLegacyCredentials() -> Bool {
+        if credentialsAreSecure {
+            legacyRefreshToken = nil
+            return true
+        }
+        guard let legacyRefreshToken else { return false }
+        let saved = SecureCredentialStore.shared.set(
+            legacyRefreshToken,
+            kind: .microsoftRefreshToken,
+            accountID: id
+        )
+        if saved { self.legacyRefreshToken = nil }
+        return saved
+    }
+
+    func removeStoredCredentials() {
+        SecureCredentialStore.shared.remove(kind: .microsoftRefreshToken, accountID: id)
+        AccessTokenStorage.shared.remove(id: id)
+    }
+
+    private var secureRefreshToken: String? {
+        SecureCredentialStore.shared.string(
+            kind: .microsoftRefreshToken,
+            accountID: id
+        ) ?? legacyRefreshToken
     }
 }
