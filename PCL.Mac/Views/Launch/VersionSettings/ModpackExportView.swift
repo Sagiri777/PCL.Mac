@@ -65,6 +65,10 @@ struct ModpackExportView: View {
                     toggleRow("存档", $options.includeSaves)
                     toggleRow("资源包", $options.includeResourcePacks)
                     toggleRow("光影包", $options.includeShaderPacks)
+                    if options.includeShaderPacks {
+                        toggleRow("光影包设置（仅包含已导出光影包的设置）", $options.includeShaderPackSettings)
+                            .padding(.leading, 20)
+                    }
                     toggleRow("整合包配置文件（版本 JSON / Jar）", $options.includeVersionJSON)
                 }
                 .padding(8)

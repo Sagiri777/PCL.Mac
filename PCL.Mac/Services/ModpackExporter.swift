@@ -49,6 +49,7 @@ public enum ModpackExporter {
         public var includeSaves: Bool = false
         public var includeResourcePacks: Bool = false
         public var includeShaderPacks: Bool = false
+        public var includeShaderPackSettings: Bool = true
         public var includeVersionJSON: Bool = true   // 对应 PCL2“整合包配置文件”勾选
 
         public init(name: String, version: String = "1.0.0", author: String = "") {
@@ -117,7 +118,10 @@ public enum ModpackExporter {
     }
 
     private static func collectContentFiles(instance: MinecraftInstance, options: Options) -> [ContentFile] {
-        let root = instance.minecraftDirectory.rootURL
+        // 游戏实际以 runningDirectory 作为 game_directory 启动，Mod、配置、存档等
+        // 都属于当前实例。这里若从 minecraftDirectory.rootURL 收集，会误把共享目录中
+        // 其它实例的内容打进整合包，也会漏掉当前隔离实例的文件。
+        let root = instance.runningDirectory
         // 对应 PageInstanceExport 中可选的子目录，以及“整合包配置文件”。
         let gameSubdirs: [(name: String, enabled: Bool, excludes: [String])] = [
             ("mods",            options.includeMods,            [".Disabled"]),
@@ -131,7 +135,17 @@ public enum ModpackExporter {
         for (sub, enabled, excludes) in gameSubdirs where enabled {
             let dir = root.appendingPathComponent(sub)
             guard fm.fileExists(atPath: dir.path) else { continue }
-            out.append(contentsOf: walk(dir: dir, root: root, excludes: excludes))
+            var files = walk(dir: dir, root: root, excludes: excludes)
+            if sub == "shaderpacks" {
+                let settingNames = shaderPackSettingNames(in: dir)
+                files.removeAll { file in
+                    guard let settingName = topLevelShaderPackSettingName(file.relativePath) else {
+                        return false
+                    }
+                    return !options.includeShaderPackSettings || !settingNames.contains(settingName)
+                }
+            }
+            out.append(contentsOf: files)
         }
         if options.includeVersionJSON {
             // 对应 PCL2“整合包配置文件”：连同版本 JSON 一起带出，便于他人复现。
@@ -153,6 +167,40 @@ public enum ModpackExporter {
             }
         }
         return out.sorted { $0.relativePath < $1.relativePath }
+    }
+
+    /// PCL 2.13.1.1 只导出已选择光影包对应的设置文件。
+    /// Iris/OptiFine 使用 `<光影包文件名>.txt`（例如 `pack.zip.txt`）保存设置；
+    /// 文件夹形式的光影包则对应 `<文件夹名>.txt`。
+    private static func shaderPackSettingNames(in directory: URL) -> Set<String> {
+        let keys: Set<URLResourceKey> = [.isDirectoryKey, .isRegularFileKey]
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: Array(keys),
+            options: [.skipsHiddenFiles]
+        ) else { return [] }
+
+        return Set(entries.compactMap { entry in
+            guard entry.pathExtension.lowercased() != "txt",
+                  let values = try? entry.resourceValues(forKeys: keys),
+                  values.isDirectory == true
+                    || (values.isRegularFile == true && ["zip", "rar"].contains(entry.pathExtension.lowercased())) else {
+                return nil
+            }
+            return entry.lastPathComponent + ".txt"
+        })
+    }
+
+    /// 若路径是 `shaderpacks/` 直属的 txt 文件，则返回文件名；嵌套在光影包
+    /// 文件夹中的 txt 属于光影包自身内容，不应被“光影包设置”开关过滤。
+    private static func topLevelShaderPackSettingName(_ relativePath: String) -> String? {
+        let prefix = "shaderpacks/"
+        guard relativePath.hasPrefix(prefix) else { return nil }
+        let nestedPath = String(relativePath.dropFirst(prefix.count))
+        guard !nestedPath.contains("/"), nestedPath.lowercased().hasSuffix(".txt") else {
+            return nil
+        }
+        return nestedPath
     }
 
     private static func walk(dir: URL, root: URL, excludes: [String]) -> [ContentFile] {

@@ -155,15 +155,18 @@ struct ModpackImportRecoveryTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let minecraftRoot = root.appending(path: "minecraft")
         let instanceURL = minecraftRoot.appending(path: "versions/test")
-        let modsURL = minecraftRoot.appending(path: "mods")
+        let modsURL = instanceURL.appending(path: "mods")
+        let sharedModsURL = minecraftRoot.appending(path: "mods")
         try FileManager.default.createDirectory(at: instanceURL, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: modsURL, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: sharedModsURL, withIntermediateDirectories: true)
 
         let manifest = """
         {"id":"1.20.1","type":"release","mainClass":"net.minecraft.client.Main","libraries":[]}
         """
         try Data(manifest.utf8).write(to: instanceURL.appending(path: "test.json"))
         try Data("inside".utf8).write(to: modsURL.appending(path: "inside.jar"))
+        try Data("shared".utf8).write(to: sharedModsURL.appending(path: "other-instance.jar"))
         let outsideURL = root.appending(path: "outside.jar")
         try Data("outside".utf8).write(to: outsideURL)
         try FileManager.default.createSymbolicLink(
@@ -183,6 +186,57 @@ struct ModpackImportRecoveryTests {
         let paths = Set(archive.map(\.path))
         #expect(paths.contains("overrides/mods/inside.jar"))
         #expect(!paths.contains("overrides/mods/linked.jar"))
+        #expect(!paths.contains("overrides/mods/other-instance.jar"))
+    }
+
+    @Test func exporterIncludesOnlyMatchingShaderPackSettings() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let minecraftRoot = root.appending(path: "minecraft")
+        let instanceURL = minecraftRoot.appending(path: "versions/test")
+        let shaderPacksURL = instanceURL.appending(path: "shaderpacks")
+        try FileManager.default.createDirectory(at: shaderPacksURL, withIntermediateDirectories: true)
+
+        let manifest = """
+        {"id":"1.20.1","type":"release","mainClass":"net.minecraft.client.Main","libraries":[]}
+        """
+        try Data(manifest.utf8).write(to: instanceURL.appending(path: "test.json"))
+        try Data("zip".utf8).write(to: shaderPacksURL.appending(path: "cinematic.zip"))
+        try Data("zip-settings".utf8).write(to: shaderPacksURL.appending(path: "cinematic.zip.txt"))
+        let folderPackURL = shaderPacksURL.appending(path: "folder-pack")
+        try FileManager.default.createDirectory(at: folderPackURL, withIntermediateDirectories: true)
+        try Data("pack-content".utf8).write(to: folderPackURL.appending(path: "shaders.properties"))
+        try Data("folder-settings".utf8).write(to: shaderPacksURL.appending(path: "folder-pack.txt"))
+        try Data("orphan".utf8).write(to: shaderPacksURL.appending(path: "orphan.txt"))
+
+        let directory = MinecraftDirectory(rootURL: minecraftRoot, name: "test")
+        let instance = try #require(MinecraftInstance.create(directory, instanceURL))
+        var options = ModpackExporter.Options(name: "test")
+        options.includeMods = false
+        options.includeConfig = false
+        options.includeShaderPacks = true
+        options.includeVersionJSON = false
+
+        let withSettingsURL = root.appending(path: "with-settings.mrpack")
+        try await ModpackExporter.export(instance: instance, options: options, to: withSettingsURL)
+        let withSettings = try Archive(url: withSettingsURL, accessMode: .read)
+        let withSettingsPaths = Set(withSettings.map(\.path))
+        #expect(withSettingsPaths.contains("overrides/shaderpacks/cinematic.zip"))
+        #expect(withSettingsPaths.contains("overrides/shaderpacks/cinematic.zip.txt"))
+        #expect(withSettingsPaths.contains("overrides/shaderpacks/folder-pack/shaders.properties"))
+        #expect(withSettingsPaths.contains("overrides/shaderpacks/folder-pack.txt"))
+        #expect(!withSettingsPaths.contains("overrides/shaderpacks/orphan.txt"))
+
+        options.includeShaderPackSettings = false
+        let withoutSettingsURL = root.appending(path: "without-settings.mrpack")
+        try await ModpackExporter.export(instance: instance, options: options, to: withoutSettingsURL)
+        let withoutSettings = try Archive(url: withoutSettingsURL, accessMode: .read)
+        let withoutSettingsPaths = Set(withoutSettings.map(\.path))
+        #expect(withoutSettingsPaths.contains("overrides/shaderpacks/cinematic.zip"))
+        #expect(withoutSettingsPaths.contains("overrides/shaderpacks/folder-pack/shaders.properties"))
+        #expect(!withoutSettingsPaths.contains("overrides/shaderpacks/cinematic.zip.txt"))
+        #expect(!withoutSettingsPaths.contains("overrides/shaderpacks/folder-pack.txt"))
+        #expect(!withoutSettingsPaths.contains("overrides/shaderpacks/orphan.txt"))
     }
 
     private func temporaryDirectory() -> URL {

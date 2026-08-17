@@ -137,6 +137,13 @@ struct InstanceOverviewView: View {
                         Util.openInFinder(instance.runningDirectory)
                     }
                     .frame(width: 120, height: 35)
+                    MyButton(text: "打开截图文件夹", foregroundStyle: AppSettings.shared.theme.getTextStyle()) {
+                        Util.openInFinder(
+                            instance.runningDirectory.appending(path: "screenshots"),
+                            createIfMissing: true
+                        )
+                    }
+                    .frame(width: 145, height: 35)
                     Spacer()
                 }
                 .padding(2)
