@@ -55,7 +55,7 @@ struct AppNavigationSurface: View {
 
             VStack(spacing: 0) {
                 NativeMacToolbar()
-                routedContent
+                AppRoutedContent()
                     .foregroundStyle(.primary)
                     .background(nativeContentSurface)
                     .clipShape(RoundedRectangle(cornerRadius: contentCornerRadius, style: .continuous))
@@ -73,7 +73,7 @@ struct AppNavigationSurface: View {
             }
             HStack(spacing: 0) {
                 LegacyLeftColumn()
-                routedContent
+                AppRoutedContent()
                     .foregroundStyle(Color("TextColor"))
             }
             .background(Rectangle().fill(settings.theme.getBackgroundStyle()))
@@ -81,26 +81,19 @@ struct AppNavigationSurface: View {
         .frame(minWidth: 700, minHeight: 420)
     }
 
-    /// AnyView 必须绑定容器身份；同一容器内切换子路由时保留视图状态。
-    private var routedContent: some View {
-        AnyView(router.getLastView())
-            .id(router.getLastViewIdentity())
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
     @ViewBuilder
     private var nativeContentSurface: some View {
         let shape = RoundedRectangle(cornerRadius: contentCornerRadius, style: .continuous)
         if let config = glassSettings.glassConfig {
             LiquidGlassBackground(
-                role: .panel,
+                role: .content,
                 config: config,
                 blurStrength: glassSettings.appearance.backgroundBlurStrength,
                 surfaceOpacity: glassSettings.appearance.surfaceOpacity,
                 tintStrength: glassSettings.appearance.tintStrength,
                 highlightStrength: glassSettings.appearance.highlightStrength,
                 shadowStrength: glassSettings.appearance.shadowStrength,
-                interactive: glassSettings.appearance.interactiveEffects,
+                interactive: false,
                 shape: shape
             )
         } else {
@@ -128,6 +121,18 @@ struct AppNavigationSurface: View {
         if strength < 0.50 { return .thinMaterial }
         if strength < 0.78 { return .regularMaterial }
         return .thickMaterial
+    }
+}
+
+/// 页面不订阅玻璃参数；拖动外观滑块时只更新周围表面，保留页面内容和状态。
+private struct AppRoutedContent: View {
+    @ObservedObject private var router = DataManager.shared.router
+    @ObservedObject private var settings = AppSettings.shared
+
+    var body: some View {
+        AnyView(router.getLastView())
+            .id(router.getLastViewIdentity())
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 

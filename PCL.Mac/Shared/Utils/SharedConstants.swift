@@ -32,7 +32,7 @@ public struct SharedConstants {
         self.logURL = applicationSupportURL.appending(path: "Logs").appending(path: "app.log")
         self.temperatureURL = applicationSupportURL.appending(path: "Temp")
         self.authlibInjectorURL = applicationSupportURL.appending(path: "authlib-injector.jar")
-        self.version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "2.2.0"
+        self.version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "2.2.1"
         
         self.dateFormatter.dateFormat = "yyyy/MM/dd HH:mm"
         self.dateFormatter.timeZone = TimeZone(identifier: "Asia/Shanghai")

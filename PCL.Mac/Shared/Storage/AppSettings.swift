@@ -83,7 +83,7 @@ public class AppSettings: ObservableObject {
                 self.theme = .load(id: themeId)
                 DataManager.shared.objectWillChange.send()
                 refreshDerivedStyles()
-                GlassSettings.shared.reloadThemeDerived()
+                refreshWindowConfiguration()
             }
         }
     }
@@ -194,6 +194,9 @@ public class AppSettings: ObservableObject {
 
     /// 仅发布窗口配置变化。避免同时再发一次 objectWillChange，造成整棵界面重复计算。
     public func refreshWindowConfiguration() {
+        // 窗框宽度既影响 AppKit 窗口尺寸，也影响 SwiftUI 内容内边距和描边。
+        // 先同步玻璃快照，避免窗口已经变大而内容仍使用旧宽度。
+        GlassSettings.shared.reloadThemeDerived()
         appearanceRevision &+= 1
     }
 

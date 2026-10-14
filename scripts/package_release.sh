@@ -6,6 +6,7 @@ PROJECT_PATH="${PROJECT_PATH:-$ROOT_DIR/PCL.Mac.xcodeproj}"
 SCHEME="${SCHEME:-PCL-Mac}"
 CONFIGURATION="${CONFIGURATION:-Release}"
 DERIVED_DATA_PATH="${DERIVED_DATA_PATH:-$ROOT_DIR/build/DerivedData}"
+SOURCE_PACKAGES_PATH="${SOURCE_PACKAGES_PATH:-$ROOT_DIR/.build/SourcePackages}"
 DIST_DIR="${DIST_DIR:-$ROOT_DIR/dist}"
 ARCHIVE_BASENAME="${ARCHIVE_BASENAME:-PCL.Mac}"
 APP_NAME="${APP_NAME:-PCL.Mac.app}"
@@ -38,6 +39,8 @@ fi
 xcodebuild \
   -project "$PROJECT_PATH" \
   -scheme "$SCHEME" \
+  -clonedSourcePackagesDirPath "$SOURCE_PACKAGES_PATH" \
+  -disableAutomaticPackageResolution \
   -resolvePackageDependencies \
   ${BUILD_SETTINGS[@]+"${BUILD_SETTINGS[@]}"}
 
@@ -51,6 +54,8 @@ for ARCHITECTURE in $ARCHITECTURES; do
     -configuration "$CONFIGURATION" \
     -destination "generic/platform=macOS" \
     -derivedDataPath "$ARCH_DERIVED_DATA_PATH" \
+    -clonedSourcePackagesDirPath "$SOURCE_PACKAGES_PATH" \
+    -disableAutomaticPackageResolution \
     clean build \
     ARCHS="$ARCHITECTURE" \
     ONLY_ACTIVE_ARCH=YES \
@@ -72,6 +77,7 @@ for ARCHITECTURE in $ARCHITECTURES; do
   fi
 
   codesign --force --deep --sign - "$APP_PATH"
+  codesign --verify --deep --strict "$APP_PATH"
 
   VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PATH/Contents/Info.plist" 2>/dev/null || echo "1.0")"
   PACKAGE_DIR="$DIST_DIR/$ARCHIVE_BASENAME-$VERSION-$ARCHITECTURE"

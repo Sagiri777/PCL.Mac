@@ -20,7 +20,7 @@
 import Foundation
 import SwiftUI
 
-public struct GlassAppearanceState {
+public struct GlassAppearanceState: Equatable {
     public let glassConfig: GlassConfig?
     public let accentColor: Color
     public let backgroundBlurStrength: Double
@@ -106,7 +106,7 @@ public final class GlassSettings: ObservableObject {
         let accentColor = s.customAccentColorEnabled
             ? Color(.sRGB, red: s.customAccentRed, green: s.customAccentGreen, blue: s.customAccentBlue)
             : (s.theme?.baseAccentColor ?? s.cachedAccentColor)
-        appearance = GlassAppearanceState(
+        let nextAppearance = GlassAppearanceState(
             glassConfig: s.theme?.getGlassConfig(),
             accentColor: accentColor,
             backgroundBlurStrength: s.glassBackgroundBlurStrength,
@@ -123,6 +123,8 @@ public final class GlassSettings: ObservableObject {
             contentCornerRadius: s.glassContentCornerRadius,
             interactiveEffects: s.glassInteractiveEffects
         )
+        guard nextAppearance != appearance else { return }
+        appearance = nextAppearance
     }
 }
 

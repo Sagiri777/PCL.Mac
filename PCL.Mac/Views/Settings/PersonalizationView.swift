@@ -12,6 +12,7 @@ struct PersonalizationView: View {
     @State private var selectedTheme: ThemeInfo = .init(id: "pcl", name: "PCL")
     @State private var themes: [ThemeInfo] = []
     @State private var visualRefreshTask: Task<Void, Never>?
+    @State private var pendingThemeRefresh = false
     
     var body: some View {
         ScrollView {
@@ -164,6 +165,10 @@ struct PersonalizationView: View {
             self.themes = ThemeParser.shared.themes
             self.selectedTheme = ThemeParser.shared.themes.find { $0.id == settings.themeId } ?? selectedTheme
         }
+        .onDisappear {
+            visualRefreshTask?.cancel()
+            applyVisualRefresh()
+        }
     }
 
     private func visual<Value>(_ binding: Binding<Value>) -> Binding<Value> {
@@ -177,15 +182,24 @@ struct PersonalizationView: View {
     }
 
     private func scheduleVisualRefresh(updateThemeStyle: Bool = false) {
+        pendingThemeRefresh = pendingThemeRefresh || updateThemeStyle
         visualRefreshTask?.cancel()
         visualRefreshTask = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(70))
             guard !Task.isCancelled else { return }
-            if updateThemeStyle {
-                settings.refreshThemeAppearance()
-            } else {
-                settings.refreshVisuals()
-            }
+            applyVisualRefresh()
+        }
+    }
+
+    private func applyVisualRefresh() {
+        guard visualRefreshTask != nil else { return }
+        visualRefreshTask = nil
+        let updateThemeStyle = pendingThemeRefresh
+        pendingThemeRefresh = false
+        if updateThemeStyle {
+            settings.refreshThemeAppearance()
+        } else {
+            settings.refreshVisuals()
         }
     }
 
@@ -267,6 +281,8 @@ private struct GlassValueSlider: View {
         HStack(spacing: 12) {
             Text(title).frame(width: 105, alignment: .leading)
             Slider(value: $value, in: range, step: step)
+                .accessibilityLabel(title)
+                .accessibilityValue(valueText)
             Text(valueText)
                 .monospacedDigit()
                 .frame(width: 48, alignment: .trailing)

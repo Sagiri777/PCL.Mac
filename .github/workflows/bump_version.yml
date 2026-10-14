@@ -135,6 +135,8 @@ jobs:
           fi
           file "$BINARY"
           test "$(lipo -archs "$BINARY")" = "$ARCHITECTURE"
+          codesign --force --deep --sign - "$APP_PATH"
+          codesign --verify --deep --strict "$APP_PATH"
 
           mkdir -p build/Release
           ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" \

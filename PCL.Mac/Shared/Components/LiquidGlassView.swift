@@ -10,12 +10,14 @@ import SwiftUI
 
 public enum GlassRole {
     case card
+    case content
     case panel
     case background
 }
 
 public struct LiquidGlassBackground<S: InsettableShape>: View {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private let role: GlassRole
     private let config: GlassConfig
     private let blurStrength: Double
@@ -51,12 +53,12 @@ public struct LiquidGlassBackground<S: InsettableShape>: View {
     @ViewBuilder
     public var body: some View {
         // 卡片列表可能同时创建大量玻璃层，逐卡片采样会明显增加滚动成本。
-        // 窗口、侧栏和内容表面则使用 macOS 26 的原生实现；旧系统以及卡片
+        // 窗口和侧栏使用 macOS 26 的原生实现；旧系统、内容表面以及卡片
         // 保持 Material 回退，保证 macOS 14+ 的行为和性能边界稳定。
         Group {
             if reduceTransparency {
                 opaqueAccessibilityFallback
-            } else if #available(macOS 26.0, *), role != .card {
+            } else if #available(macOS 26.0, *), role == .panel || role == .background {
                 nativeLiquidGlass
             } else {
                 swiftUIMaterialFallback
@@ -68,7 +70,7 @@ public struct LiquidGlassBackground<S: InsettableShape>: View {
 
     private var opaqueAccessibilityFallback: some View {
         shape
-            .fill(Color("MyCardBackgroundColor").opacity(role == .background ? 1 : 0.96))
+            .fill(Color("MyCardBackgroundColor"))
             .overlay(highlightBorder)
             .shadow(color: borderColor.opacity(0.08), radius: 3, y: 1)
     }
@@ -80,7 +82,7 @@ public struct LiquidGlassBackground<S: InsettableShape>: View {
             .glassEffect(
                 .regular
                     .tint(tintColor.opacity(tintOpacity))
-                    .interactive(interactive && role != .background),
+                    .interactive(interactive && !reduceMotion && role == .panel),
                 in: shape
             )
             // glassEffect 自己负责背景采样和模糊。这里不能再把“模糊强度”
@@ -95,7 +97,8 @@ public struct LiquidGlassBackground<S: InsettableShape>: View {
     private var swiftUIMaterialFallback: some View {
         shape
             .fill(fallbackMaterial)
-            .opacity(GlassRenderingMetrics.fallbackSurfaceOpacity(
+            // 内容表面的透明度独立于磨砂强度，低模糊设置仍保持正文可读。
+            .opacity(role == .content ? surfaceOpacityMultiplier : GlassRenderingMetrics.fallbackSurfaceOpacity(
                 effectiveStrength: effectiveStrength,
                 surfaceOpacityMultiplier: surfaceOpacityMultiplier
             ))
@@ -125,7 +128,7 @@ public struct LiquidGlassBackground<S: InsettableShape>: View {
         switch role {
         case .card: config.cardBlur
         case .panel: config.panelBlur
-        case .background: config.backgroundBlur
+        case .content, .background: config.backgroundBlur
         }
     }
 
